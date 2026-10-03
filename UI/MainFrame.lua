@@ -4,6 +4,9 @@ local frame
 
 local NAME_WIDTH, CLASS_WIDTH, RANK_WIDTH, MOD_WIDTH = 130, 90, 110, 60
 local ROW_HEIGHT = 22
+local FRAME_WIDTH, FRAME_HEIGHT = 500, 400
+local MIN_WIDTH, MIN_HEIGHT = 480, 250
+local MAX_WIDTH, MAX_HEIGHT = 900, 1500
 
 local sortKey, sortAscending = "rank", true
 local headers = {}
@@ -109,10 +112,10 @@ end
 
 local function CreateMainFrame()
     frame = CreateFrame("Frame", "RolloverMainFrame", UIParent, "BasicFrameTemplateWithInset")
-    frame:SetSize(500, 400)
+    frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
     frame:SetPoint("CENTER")
     frame:SetResizable(true)
-    frame:SetResizeBounds(480, 250, 900, 1500)
+    frame:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
     frame:SetFrameStrata("HIGH")
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
