@@ -22,7 +22,7 @@ Update this section as features land.
 | --- | --- |
 | TOC / load | `Core\DB.lua`, `UI\MainFrame.lua`, `Rollover.lua` (loaded last: `ns.version`, slash command, event frame); `## SavedVariables: RolloverDB` |
 | Item reserving | Not started |
-| Roll modifiers | Not started |
+| Roll modifiers | Roll popup (`UI\RollFrame.lua`): `/rollover <item-link>` shows the item with Pass and `Roll (+x)` buttons; Roll does `RandomRoll(1, 100)`, reads the result from `CHAT_MSG_SYSTEM` and prints `roll + modifier` in chat as a `Rollover:` message (no /say: the client blocks SAY from event handlers outside instances) |
 | Guild modifier tracking / sync | Local only: per-member `modifier` stored in `RolloverDB.members` (editable in the roster); no sync yet |
 | Main window | Movable, resizable (bottom-right grip, 480x250 to 900x1500; size not persisted) frame `Rollover <version>` (`UI\MainFrame.lua`) showing the guild roster table (class-colored name, class, rank, editable modifier; headers are clickable to sort, default rank ascending) in a ScrollBox; toggled by `/rollover`, closes on Escape. Roster is imported once from the guild (`RolloverDB.rosterImported`); later joins/rank changes are not yet synced |
 | Options UI | Not started |
@@ -35,6 +35,7 @@ TODO for the TOC: replace the placeholder `## Notes:` text, add `## SavedVariabl
 - Forever **Beta** interface version is `16001` (patch 1.60.1, build 70009). Test/Live values were not published yet; re-check the [TOC format](https://warcraft.wiki.gg/wiki/TOC_format#Interface_version) page. Get the live value in-game with `/dump (select(4, GetBuildInfo()))`.
 - Forever launch timeline: Beta Sep 17 - Oct 22 2026, launch Nov 4 2026, raids unlock Dec 9 2026 (Barrow Deeps, Hyjal Summit, Onyxia's Lair). Level cap is 60.
 - **Midnight "addon disarmament" is active in Forever**: Secret Values, combat-log removal, and communication restrictions all apply. See section 8 - this directly affects this addon (roll parsing and guild sync).
+- Characters have a **first and last name**: `UnitName("player")` returns only the first name ("Andriod"); `GetUnitName("player", true)` returns the full name ("Andriod En"), which is what roll messages use (`ns.GetPlayerName()`).
 - The client is **Lua 5.1** (with WoW additions such as `strsplit`, `format`, `wipe`, `tinsert`, `CopyTable`). No `goto`, no `//`, no bitwise operators (use the `bit` library).
 - Detect the client in code: `WOW_PROJECT_ID == WOW_PROJECT_CAMELOT`, or `select(4, GetBuildInfo())` between 16000 and 20000. Ruleset: `C_GameRules.IsGameRuleActive(Enum.GameRule.HardcoreRuleset | RPRuleset | PvPRuleset)`.
 
@@ -198,7 +199,7 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 ## 6. Coding conventions for this repo
 
 - `local addonName, ns = ...` at the top of every Lua file; share via `ns`. Avoid new globals (allowed: `RolloverDB`, `SLASH_ROLLOVER*`, `SlashCmdList.ROLLOVER`, named frames needed for `UISpecialFrames` such as `RolloverMainFrame`, Addon Compartment functions).
-- Slash commands: `/rollover` toggles the main window.
+- Slash commands: `/rollover` toggles the main window; `/rollover <item-link>` opens the roll popup for that item; `/rollover debug` opens the debug log window (log via `ns.Debug`); `/rollover debug roll` opens the roll popup with a test item.
 - Cache frequently used globals as locals (`local format, pairs = format, pairs`) only when it matters for hot paths.
 - One responsibility per file; list files in the TOC in dependency order (core -> data -> logic -> UI -> init).
 - All user-visible text goes through a localization table (`ns.L`) once the first string is added; default locale `enUS`.
@@ -219,7 +220,9 @@ Modules\Reserves.lua    -- reserve data model + rules
 Modules\Modifiers.lua   -- modifier rules and calculations for rolls
 Modules\Rolls.lua       -- roll detection/parsing/ranking, announcements
 Modules\GuildSync.lua   -- addon messages, versioning, throttled send queue, roster integration
-UI\MainFrame.lua        -- main window (ns.ToggleMainFrame); later options panel, reserve list, roll window, tooltip hooks
+UI\MainFrame.lua        -- main window (ns.ToggleMainFrame); later options panel, reserve list, tooltip hooks
+UI\RollFrame.lua        -- roll-for-item popup (ns.ShowRollFrame(link)); Core\DB.lua also has ns.GetPlayerModifier
+UI\DebugFrame.lua       -- ns.Debug(msg) in-memory log (200 lines) + copyable window (ns.ToggleDebugFrame, `/rollover debug`)
 Locales\                -- enUS.lua first
 ```
 

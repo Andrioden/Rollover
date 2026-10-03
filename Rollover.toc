@@ -7,4 +7,6 @@
 
 Core\DB.lua
 UI\MainFrame.lua
+UI\DebugFrame.lua
+UI\RollFrame.lua
 Rollover.lua

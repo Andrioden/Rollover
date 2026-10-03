@@ -55,6 +55,25 @@ function ns.SetModifier(name, value)
     end
 end
 
+-- Forever names have a first and last name; UnitName only returns the first.
+function ns.GetPlayerName()
+    return GetUnitName("player", true)
+end
+
+-- Modifier of the current player; 0 when not in the roster.
+function ns.GetPlayerModifier()
+    local members = ns.db and ns.db.members
+    if not members then return 0 end
+
+    local name = ns.GetPlayerName()
+    for key, member in pairs(members) do
+        if key == name or Ambiguate(key, "short") == name then
+            return member.modifier or 0
+        end
+    end
+    return 0
+end
+
 -- sortKey: "name" | "class" | "rank" | "modifier"; ties fall back to name.
 function ns.GetRosterList(sortKey, ascending)
     local list = {}

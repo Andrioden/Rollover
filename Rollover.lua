@@ -2,9 +2,34 @@ local addonName, ns = ...
 
 ns.version = C_AddOns.GetAddOnMetadata(addonName, "Version") or "?"
 
+function ns.Print(msg)
+    print("|cff33ccffRollover:|r " .. msg)
+end
+
 SLASH_ROLLOVER1 = "/rollover"
-SlashCmdList.ROLLOVER = function()
-    ns.ToggleMainFrame()
+SlashCmdList.ROLLOVER = function(msg)
+    msg = strtrim(msg or "")
+    if msg == "" then
+        ns.ToggleMainFrame()
+        return
+    end
+
+    local command = msg:lower()
+    if command == "debug" then
+        ns.ToggleDebugFrame()
+        return
+    elseif command == "debug roll" then
+        ns.DebugRoll()
+        return
+    end
+
+    -- Midnight-style links use color names like |cnIQ1:, so don't assume hex colors.
+    local link = msg:match("|c[^|]*|Hitem:.-|h%[.-%]|h|r") or msg:match("|Hitem:.-|h%[.-%]|h")
+    if link then
+        ns.ShowRollFrame(link)
+    else
+        ns.Print("Usage: /rollover [item-link]")
+    end
 end
 
 local events = CreateFrame("Frame")
@@ -26,11 +51,11 @@ events:SetScript("OnEvent", function(self, event, arg1)
 end)
 
 -- Uncomment to reopen the window after /reload to speed up debugging.
--- local f = CreateFrame("Frame")
--- f:RegisterEvent("PLAYER_ENTERING_WORLD")
--- f:SetScript("OnEvent", function(self, event, isLogin, isReload)
---     self:UnregisterEvent(event)
---     if isReload then
---         ns.ToggleMainFrame()
---     end
--- end)
+local f = CreateFrame("Frame")
+f:RegisterEvent("PLAYER_ENTERING_WORLD")
+f:SetScript("OnEvent", function(self, event, isLogin, isReload)
+    self:UnregisterEvent(event)
+    if isReload then
+        ns.ToggleMainFrame()
+    end
+end)
