@@ -7,12 +7,9 @@ events:SetScript("OnEvent", function(self, event, arg1)
         if arg1 ~= addonName then return end
         self:UnregisterEvent(event)
         ns.InitDB()
-        self:RegisterEvent("PLAYER_LOGIN")
         self:RegisterEvent("GUILD_ROSTER_UPDATE")
-    elseif event == "PLAYER_LOGIN" then
-        ns.RequestGuildRoster()
     elseif event == "GUILD_ROSTER_UPDATE" then
-        if ns.TryImportGuildRoster() and ns.RefreshRoster then
+        if ns.RefreshRoster then
             ns.RefreshRoster()
         end
     end

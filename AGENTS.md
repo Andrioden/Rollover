@@ -23,8 +23,8 @@ Update this section as features land.
 | TOC / load | `Core\Utils.lua`, `Core\DB.lua`, `UI\*.lua`, `Core\Commands.lua`, `Core\Events.lua`, `Rollover.lua` (loaded last: `ns.version`); `## SavedVariables: RolloverDB` |
 | Item reserving | Not started |
 | Roll modifiers | Roll popup (`UI\RollFrame.lua`): `/rollover <item-link>` shows the item with Pass and `Roll (+x)` buttons; Roll does `RandomRoll(1, 100)`, reads the result from `CHAT_MSG_SYSTEM` and prints `roll + modifier` in chat as a `Rollover:` message (no /say: the client blocks SAY from event handlers outside instances) |
-| Guild modifier tracking / sync | Local only: per-member `modifier` stored in `RolloverDB.members` (editable in the roster); no sync yet |
-| Main window | Movable, resizable (bottom-right grip, 480x250 to 900x1500; size not persisted) frame `Rollover <version>` (`UI\MainFrame.lua`) showing the guild roster table (class-colored name, class, rank, editable modifier; headers are clickable to sort, default rank ascending) in a ScrollBox; toggled by `/rollover`, closes on Escape. Roster is imported once from the guild (`RolloverDB.rosterImported`); later joins/rank changes are not yet synced |
+| Guild modifier tracking / sync | Local only: numeric modifiers stored in `RolloverDB.modifiers[Name-Realm]` (editable in the roster); no sync yet |
+| Main window | Movable, resizable (bottom-right grip, 480x250 to 900x1500; size not persisted) frame `Rollover <version>` (`UI\MainFrame.lua`) showing the guild roster table (class-colored name, class, rank, editable modifier; headers are clickable to sort, default rank ascending) in a ScrollBox; toggled by `/rollover`, closes on Escape. Opening requests the guild roster and merges current guild data with saved modifiers; roster events refresh the table only while visible. Class/rank data is not persisted |
 | Options UI | Not started |
 
 TODO for the TOC: replace the placeholder `## Notes:` text, add `## SavedVariables:` once persistence exists, consider `## AllowLoadGameType: camelot` (see 4.2).
@@ -217,8 +217,8 @@ Rollover.toc
 Rollover.lua            -- bootstrap (loaded last): ns.version
 Core\Utils.lua          -- shared helpers (ns.Print)
 Core\Commands.lua       -- /rollover slash command dispatch
-Core\Events.lua         -- event frames (ADDON_LOADED -> ns.InitDB, PLAYER_LOGIN, GUILD_ROSTER_UPDATE -> first-time import)
-Core\DB.lua             -- RolloverDB defaults, ns.InitDB, ns.TryImportGuildRoster, ns.GetRosterList, ns.SetModifier
+Core\Events.lua         -- event frame (ADDON_LOADED -> ns.InitDB, GUILD_ROSTER_UPDATE -> visible roster refresh)
+Core\DB.lua             -- modifier-only RolloverDB defaults, ns.InitDB, ns.RequestGuildRoster, ns.GetRosterList, ns.GetModifier, ns.SetModifier
 Modules\Reserves.lua    -- reserve data model + rules
 Modules\Modifiers.lua   -- modifier rules and calculations for rolls
 Modules\Rolls.lua       -- roll detection/parsing/ranking, announcements
@@ -229,7 +229,7 @@ UI\DebugFrame.lua       -- ns.Debug(msg) in-memory log (200 lines) + copyable wi
 Locales\                -- enUS.lua first
 ```
 
-Data model (SavedVariables `RolloverDB`, currently version 1): `version`, `rosterImported`, `members[Name-Realm] = { class = classFile, rank, rankIndex, modifier }`. Planned additions: `options`, `reserves[itemID] = { [playerName] = { ... } }`, `sync = { lastFullSync, peers }`. Player keys are `Name-Realm`.
+Data model (SavedVariables `RolloverDB`, currently version 1): `version`, `modifiers[Name-Realm] = number`. No migration from the earlier development-only member records; reset old test SavedVariables when testing this shape. Display rows are built from the current guild roster, with missing modifiers treated as 0 without creating saved entries. Saved modifiers for absent members are retained, but those members are not displayed. Player modifier lookup works without opening the roster window. Planned additions: `options`, `reserves[itemID] = { [playerName] = { ... } }`, `sync = { lastFullSync, peers }`. Player keys are `Name-Realm`.
 
 Comm protocol sketch: prefix `"Rollover"`; first field is a protocol version, second a message type (e.g. `HELLO`, `MOD_UPDATE`, `MOD_REQUEST`, `RESERVE_UPDATE`); send on `"GUILD"`; only accept state-changing messages from senders with sufficient guild rank. Document each message type here when implemented.
 

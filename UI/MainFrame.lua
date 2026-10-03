@@ -37,12 +37,11 @@ local function InitRow(row, data)
         edit:SetScript("OnEnterPressed", edit.ClearFocus)
         edit:SetScript("OnEscapePressed", edit.ClearFocus)
         edit:SetScript("OnEditFocusLost", function(self)
-            local member = ns.db.members[row.key]
             local value = tonumber(self:GetText())
             if value then
-                member.modifier = value
+                ns.SetModifier(row.key, value)
             end
-            self:SetText(tostring(member.modifier))
+            self:SetText(tostring(ns.GetModifier(row.key)))
             self:SetCursorPosition(0)
             self:HighlightText(0, 0)
         end)
@@ -76,7 +75,7 @@ local function UpdateHeaderLabels()
 end
 
 function ns.RefreshRoster()
-    if not frame or not ns.db then return end
+    if not frame or not frame:IsShown() or not ns.db then return end
 
     local list = ns.GetRosterList(sortKey, sortAscending)
     frame.scrollBox:SetDataProvider(CreateDataProvider(list), ScrollBoxConstants.RetainScrollPosition)

@@ -4,8 +4,7 @@ local DB_VERSION = 1
 
 local defaults = {
     version = DB_VERSION,
-    rosterImported = false,
-    members = {}, -- [Name-Realm] = { class = classFile, rank = rankName, rankIndex = n, modifier = number }
+    modifiers = {}, -- [Name-Realm] = number
 }
 
 function ns.InitDB()
@@ -24,35 +23,12 @@ function ns.RequestGuildRoster()
     end
 end
 
--- One-time import; returns true when the import happened.
-function ns.TryImportGuildRoster()
-    local db = ns.db
-    if not db or db.rosterImported or not IsInGuild() then return false end
-
-    local count = GetNumGuildMembers()
-    if not count or count == 0 then return false end
-
-    for i = 1, count do
-        local name, rankName, rankIndex, _, _, _, _, _, _, _, classFile = GetGuildRosterInfo(i)
-        if name and not db.members[name] then
-            db.members[name] = {
-                class = classFile,
-                rank = rankName,
-                rankIndex = rankIndex,
-                modifier = 0,
-            }
-        end
-    end
-
-    db.rosterImported = true
-    return true
+function ns.GetModifier(name)
+    return ns.db and ns.db.modifiers[name] or 0
 end
 
 function ns.SetModifier(name, value)
-    local member = ns.db and ns.db.members[name]
-    if member then
-        member.modifier = value
-    end
+    ns.db.modifiers[name] = value
 end
 
 -- Forever names have a first and last name; UnitName only returns the first.
@@ -62,13 +38,13 @@ end
 
 -- Modifier of the current player; 0 when not in the roster.
 function ns.GetPlayerModifier()
-    local members = ns.db and ns.db.members
-    if not members then return 0 end
+    local modifiers = ns.db and ns.db.modifiers
+    if not modifiers then return 0 end
 
     local name = ns.GetPlayerName()
-    for key, member in pairs(members) do
+    for key, modifier in pairs(modifiers) do
         if key == name or Ambiguate(key, "short") == name then
-            return member.modifier or 0
+            return modifier
         end
     end
     return 0
@@ -77,8 +53,21 @@ end
 -- sortKey: "name" | "class" | "rank" | "modifier"; ties fall back to name.
 function ns.GetRosterList(sortKey, ascending)
     local list = {}
-    for name, member in pairs(ns.db.members) do
-        list[#list + 1] = { name = name, member = member }
+    if not IsInGuild() then return list end
+
+    for i = 1, GetNumGuildMembers() do
+        local name, rankName, rankIndex, _, _, _, _, _, _, _, classFile = GetGuildRosterInfo(i)
+        if name then
+            list[#list + 1] = {
+                name = name,
+                member = {
+                    class = classFile,
+                    rank = rankName,
+                    rankIndex = rankIndex,
+                    modifier = ns.GetModifier(name),
+                },
+            }
+        end
     end
 
     local function value(entry)
