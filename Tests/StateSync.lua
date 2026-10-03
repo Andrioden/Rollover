@@ -179,6 +179,7 @@ local function client(name)
     c.load("Core\\DB.lua")
     c.load("Modules\\GuildSync.lua")
     c.load("UI\\DebugFrame.lua")
+    c.load("UI\\TextDialog.lua")
     c.load("UI\\ExportFrame.lua")
     c.load("UI\\ImportFrame.lua")
     c.load("UI\\MainFrame.lua")
@@ -290,7 +291,7 @@ f.ns.OnSyncMessage("Rollover", "1\tVALUE\t" .. requestId .. "\t1\tPublisher-Real
 assert(f.ns.GetModifier("Publisher-Realm") == -7)
 f.ns.OnSyncMessage("Rollover", "1\tEND\t" .. requestId .. "\t2", "WHISPER", "Publisher-Realm")
 assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Publisher-Realm") == -7)
-assert(last(f):find("Partial changes remain", 1, true))
+assert(last(f):find("may be incomplete", 1, true))
 advance(35)
 
 -- Lockdown defers without losing the pre-sync backup (reported once, not on every retry).
@@ -308,6 +309,7 @@ f.result = 12
 assert(f.ns.RequestSync())
 advance(2)
 assert(not f.ns.IsSyncPending() and last(f):find("12", 1, true))
+assert(count(f, "may be incomplete") == 1) -- failures before BEGIN must not claim partial changes
 f.result = 0
 
 -- Cancel releases the UI immediately, and throttle retries the request.
@@ -434,6 +436,7 @@ assert(f.ns.SelectPublisher("Third-Realm"))
 assert(f.ns.RequestSync())
 advance(5)
 assert(not f.ns.IsSyncPending() and last(f):find("not publishing", 1, true))
+assert(count(f, "may be incomplete") == 1)
 noAPI.env.C_EncodingUtil = nil
 assert(not noAPI.ns.ImportModifiers("{}"))
 noAPI.ns.ExportModifiers()
@@ -448,8 +451,13 @@ assert(f.ns.ValidateModifierState(large))
 f.ns.db.modifiers = {}
 f.ns.ExportModifiers()
 assert(f.frames.RolloverExportFrame.edit:GetText() == "{}")
+f.roster = { "Twin-One", "Twin-Two", "Twin" }
+assert(f.ns.ResolveGuildMember("Twin") == "Twin") -- an exact match beats ambiguous short names
 f.roster = { "Twin-One", "Twin-Two" }
 assert(not f.ns.ResolveGuildMember("Twin"))
+f.roster = { "Solo Player" }
+assert(f.ns.ResolveGuildMember("Solo Player-Realm") == "Solo Player") -- sender with a realm suffix
+assert(not f.ns.ResolveGuildMember("Other Player"))
 
 -- Forever's roster has no realm suffix ("First Last"): edit, export/import and sync must work.
 local rp, rf = client("Andriod En"), client("Other Player")

@@ -11,6 +11,7 @@ Core\DB.lua
 Modules\GuildSync.lua
 UI\MainFrame.lua
 UI\DebugFrame.lua
+UI\TextDialog.lua
 UI\ExportFrame.lua
 UI\ImportFrame.lua
 UI\RollFrame.lua

@@ -1,24 +1,23 @@
 local addonName, ns = ...
 
 local PREFIX, PROTOCOL = "Rollover", "1"
-local TIMEOUT, MAX_MEMBERS = 1800, 1000
+local TIMEOUT, MAX_MEMBERS = 1800, ns.MAX_MEMBERS
 local queue, recentRequests = {}, {}
 local pending, timer, ready
 local sequence = 0
 
-local function GuildKey()
-    if not IsInGuild() then return end
-    local guild, _, _, realm = GetGuildInfo("player")
-    if issecretvalue(guild) or issecretvalue(realm) or type(guild) ~= "string" then return end
-    realm = realm or GetNormalizedRealmName()
-    if issecretvalue(realm) or type(realm) ~= "string" then return end
-    return realm .. ":" .. guild
+-- Ends the active transfer with a chat message. Once BEGIN arrived the local table was
+-- cleared, so the player is also told that the data may be incomplete.
+local function EndTransfer(message)
+    local started = pending.count ~= nil
+    pending = nil
+    ns.Print(message)
+    if started then ns.Print(ns.L.PARTIAL_CHANGES) end
+    ns.RefreshRoster()
 end
 
 local function Fail(message)
-    pending = nil
-    ns.Print(string.format(ns.L.SYNC_FAILED, message))
-    ns.RefreshRoster()
+    EndTransfer(string.format(ns.L.SYNC_FAILED, message))
 end
 
 local function Message(kind, id, ...)
@@ -44,22 +43,26 @@ end
 
 local function Enqueue(task)
     if #queue >= 3 then ns.Debug("Sync send queue is full"); return false end
-    task.index, task.expires, task.guild = 1, GetTime() + TIMEOUT, GuildKey()
+    task.index, task.expires = 1, GetTime() + TIMEOUT
     queue[#queue + 1] = task
     Schedule(1)
     return true
 end
 
+-- Queued messages are dropped once their target left the roster, their request ended,
+-- or the owner of a snapshot stopped publishing.
+local function IsCurrent(task)
+    if not ns.ResolveGuildMember(task.target) then return false end
+    if task.request then return pending == task.request end
+    return not task.snapshot or ns.IsPublisher()
+end
+
 Pump = function()
     local task = queue[1]
     if not task then return end
-    local current = task.guild and task.guild == GuildKey() and ns.ResolveGuildMember(task.target)
-    if task.request then current = current and pending == task.request end
-    if task.snapshot then current = current and ns.IsPublisher() and task.publisher == ns.db.sync.publisher end
-    if not current or GetTime() >= task.expires then
+    if not IsCurrent(task) or GetTime() >= task.expires then
         table.remove(queue, 1)
-        if task.request and pending == task.request then Fail(ns.L.TIMEOUT)
-        elseif task.snapshot then ns.Print(string.format(ns.L.SYNC_FAILED, ns.L.TIMEOUT)) end
+        ns.Debug("Dropped queued sync message for " .. task.target)
     else
         local result = C_ChatInfo.SendAddonMessage(PREFIX, task.messages[task.index], "WHISPER", task.target)
         local results = Enum.SendAddonMessageResult
@@ -89,7 +92,7 @@ function ns.IsSyncPending()
 end
 
 function ns.CancelSync()
-    if pending then Fail(ns.L.SYNC_CANCELLED) end
+    if pending then EndTransfer(ns.L.SYNC_CANCELLED) end
 end
 
 function ns.SelectPublisher(name)
@@ -113,15 +116,14 @@ function ns.RequestSync()
     local source = ns.db.sync.publisher
     if not source then ns.Print(ns.L.SELECT_PUBLISHER); return false end
     if ns.IsPublisher() then ns.Print(ns.L.LOCAL_PUBLISHER); return false end
-    local guild = GuildKey()
-    if not guild then ns.Print(ns.L.NO_GUILD); return false end
+    if not IsInGuild() then ns.Print(ns.L.NO_GUILD); return false end
     if not ns.ResolveGuildMember(source) then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
     if #queue >= 3 then ns.Print(ns.L.BUSY); return false end
     ns.SaveBackup()
     sequence = sequence + 1
     local transfer = {
         id = string.format("%d-%d", GetServerTime(), sequence),
-        sender = source, guild = guild, received = 0, names = {},
+        sender = source, received = 0, names = {},
     }
     pending = transfer
     Enqueue({ target = source, request = transfer, messages = { Message("REQUEST", transfer.id) } })
@@ -157,19 +159,15 @@ local function Respond(sender, id)
     table.sort(names)
     local messages = { Message("BEGIN", id, #names) }
     for i, name in ipairs(names) do
-        local message = Message("VALUE", id, i, name, string.format("%.17g", modifiers[name]))
-        if #message > 255 then SendError(sender, id, "INVALID_TRANSFER"); return end
-        messages[#messages + 1] = message
+        messages[#messages + 1] = Message("VALUE", id, i, name, string.format("%.17g", modifiers[name]))
     end
     messages[#messages + 1] = Message("END", id, #names)
-    Enqueue({ target = sender, snapshot = true, publisher = ns.db.sync.publisher, messages = messages })
+    Enqueue({ target = sender, snapshot = true, messages = messages })
 end
 
+-- A transfer cannot continue once its publisher left the guild roster.
 function ns.OnSyncContextChanged()
-    if pending and (pending.guild ~= GuildKey()
-        or not ns.ResolveGuildMember(pending.sender) or ns.db.sync.publisher ~= pending.sender) then
-        Fail(ns.L.NO_GUILD)
-    end
+    if pending and not ns.ResolveGuildMember(pending.sender) then Fail(ns.L.NO_GUILD) end
 end
 
 function ns.OnSyncMessage(prefix, text, channel, sender)
@@ -177,7 +175,7 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
     if prefix ~= PREFIX or channel ~= "WHISPER" or type(text) ~= "string"
         or #text > 255 or type(sender) ~= "string" then return end
     local member = ns.ResolveGuildMember(sender)
-    if not member or not GuildKey() then return end
+    if not member then return end
     local fields = {}
     for field in (text .. "\t"):gmatch("(.-)\t") do fields[#fields + 1] = field end
     local id = fields[3]
@@ -190,8 +188,7 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         if #fields == 3 then Respond(member, id) end
         return
     end
-    if not pending or member ~= pending.sender or id ~= pending.id
-        or pending.guild ~= GuildKey() or ns.db.sync.publisher ~= member then return end
+    if not pending or member ~= pending.sender or id ~= pending.id then return end
     if fields[2] == "BEGIN" then
         local count = #fields == 4 and Integer(fields[4], MAX_MEMBERS)
         if not count or pending.count then Fail(ns.L.INVALID_TRANSFER); return end

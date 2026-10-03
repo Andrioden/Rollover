@@ -1,6 +1,8 @@
 local addonName, ns = ...
 
 local DB_VERSION = 1
+local MAX_JSON_BYTES = 200000
+ns.MAX_MEMBERS = 1000
 
 local defaults = {
     version = DB_VERSION,
@@ -41,20 +43,23 @@ function ns.IsValidMemberName(name)
         and #name > 0 and #name <= 96 and not name:find("[%c|]")
 end
 
+-- Exact roster name, or the unambiguous roster member with the same realm-less name
+-- (addon message senders may carry a realm suffix that the roster lacks, or vice versa).
 function ns.ResolveGuildMember(input)
     if issecretvalue(input) or type(input) ~= "string" or not IsInGuild() then return end
-    local found
+    local short = Ambiguate(input, "short")
+    local found, ambiguous
     for i = 1, GetNumGuildMembers() do
         local name = GetGuildRosterInfo(i)
         if not issecretvalue(name) and type(name) == "string" then
             if name == input then return name end
-            if not input:find("-", 1, true) and Ambiguate(name, "short") == input then
-                if found then return end
+            if Ambiguate(name, "short") == short then
+                if found then ambiguous = true end
                 found = name
             end
         end
     end
-    return found
+    if not ambiguous then return found end
 end
 
 function ns.IsPublisher()
@@ -63,8 +68,7 @@ function ns.IsPublisher()
 end
 
 function ns.CanEditModifiers()
-    return ns.db and (not ns.db.sync.publisher or ns.IsPublisher())
-        and not ns.IsSyncPending()
+    return (not ns.db.sync.publisher or ns.IsPublisher()) and not ns.IsSyncPending()
 end
 
 function ns.SetModifier(name, value)
@@ -95,7 +99,7 @@ function ns.ValidateModifierState(state)
             return false, ns.L.INVALID_STATE
         end
         count = count + 1
-        if count > 1000 then return false, ns.L.STATE_TOO_LARGE end
+        if count > ns.MAX_MEMBERS then return false, string.format(ns.L.STATE_TOO_LARGE, ns.MAX_MEMBERS) end
     end
     return true
 end
@@ -104,8 +108,6 @@ function ns.RestoreBackup(key)
     if ns.IsSyncPending() then ns.Print(ns.L.BUSY); return false end
     local backup = ns.db.backups[key]
     if not backup then ns.Print(ns.L.BACKUP_MISSING); return false end
-    local valid, message = ns.ValidateModifierState(backup)
-    if not valid then ns.Print(message); return false end
     ns.SaveBackup()
     ns.db.modifiers = CopyTable(backup)
     ns.RefreshRoster()
@@ -118,15 +120,9 @@ function ns.ExportModifiers()
         ns.Print(ns.L.JSON_UNAVAILABLE)
         return
     end
-    local valid, message = ns.ValidateModifierState(ns.db.modifiers)
-    if not valid then ns.Print(message); return end
-    local ok, text = pcall(C_EncodingUtil.SerializeJSON, ns.db.modifiers)
-    if not ok or type(text) ~= "string" then
-        ns.Print(string.format(ns.L.JSON_FAILED, tostring(text)))
-        return
-    end
     -- An empty Lua table can serialize as an array; the exchange format is an object.
-    if next(ns.db.modifiers) == nil then text = "{}" end
+    local text = "{}"
+    if next(ns.db.modifiers) then text = C_EncodingUtil.SerializeJSON(ns.db.modifiers) end
     ns.ShowExportFrame(text)
 end
 
@@ -136,7 +132,8 @@ function ns.ImportModifiers(text)
         ns.Print(ns.L.JSON_UNAVAILABLE)
         return false
     end
-    if #text > 200000 then ns.Print(ns.L.JSON_TOO_LARGE); return false end
+    if #text > MAX_JSON_BYTES then ns.Print(string.format(ns.L.JSON_TOO_LARGE, MAX_JSON_BYTES)); return false end
+    -- Rejects arrays and scalars; an empty array would otherwise pass validation and wipe everything.
     if not text:match("^%s*{") or not text:match("}%s*$") then
         ns.Print(ns.L.INVALID_STATE)
         return false
