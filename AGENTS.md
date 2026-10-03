@@ -20,10 +20,11 @@ Update this section as features land.
 
 | Area | Status |
 | --- | --- |
-| TOC / load | Skeleton (`Rollover.toc`, `Rollover.lua` with a hello-world `print`) |
+| TOC / load | Bootstrap (`Rollover.lua`: `ns.version` from TOC, `/rollover` slash command) |
 | Item reserving | Not started |
 | Roll modifiers | Not started |
 | Guild modifier tracking / sync | Not started |
+| Main window | Empty movable frame titled `Rollover <version>` (`UI\MainFrame.lua`), toggled by `/rollover`, closes on Escape |
 | Options UI | Not started |
 
 TODO for the TOC: replace the placeholder `## Notes:` text, add `## SavedVariables:` once persistence exists, consider `## AllowLoadGameType: camelot` (see 4.2).
@@ -196,7 +197,8 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 
 ## 6. Coding conventions for this repo
 
-- `local addonName, ns = ...` at the top of every Lua file; share via `ns`. Avoid new globals (allowed: `RolloverDB`, `SLASH_ROLLOVER*`, `SlashCmdList.ROLLOVER`, Addon Compartment functions).
+- `local addonName, ns = ...` at the top of every Lua file; share via `ns`. Avoid new globals (allowed: `RolloverDB`, `SLASH_ROLLOVER*`, `SlashCmdList.ROLLOVER`, named frames needed for `UISpecialFrames` such as `RolloverMainFrame`, Addon Compartment functions).
+- Slash commands: `/rollover` toggles the main window.
 - Cache frequently used globals as locals (`local format, pairs = format, pairs`) only when it matters for hot paths.
 - One responsibility per file; list files in the TOC in dependency order (core -> data -> logic -> UI -> init).
 - All user-visible text goes through a localization table (`ns.L`) once the first string is added; default locale `enUS`.
@@ -211,13 +213,13 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 
 ```
 Rollover.toc
-Rollover.lua            -- bootstrap: namespace, event frame, ADDON_LOADED/PLAYER_LOGIN
+Rollover.lua            -- bootstrap (loaded last): ns.version, slash command; later event frame, ADDON_LOADED/PLAYER_LOGIN
 Core\                   -- db/defaults/migrations, utils, print, localization
 Modules\Reserves.lua    -- reserve data model + rules
 Modules\Modifiers.lua   -- modifier rules and calculations for rolls
 Modules\Rolls.lua       -- roll detection/parsing/ranking, announcements
 Modules\GuildSync.lua   -- addon messages, versioning, throttled send queue, roster integration
-UI\                     -- options panel, reserve list, roll window, tooltip hooks
+UI\MainFrame.lua        -- main window (ns.ToggleMainFrame); later options panel, reserve list, roll window, tooltip hooks
 Locales\                -- enUS.lua first
 ```
 
