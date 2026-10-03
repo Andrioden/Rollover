@@ -20,11 +20,11 @@ Update this section as features land.
 
 | Area | Status |
 | --- | --- |
-| TOC / load | Bootstrap (`Rollover.lua`: `ns.version` from TOC, `/rollover` slash command) |
+| TOC / load | `Core\DB.lua`, `UI\MainFrame.lua`, `Rollover.lua` (loaded last: `ns.version`, slash command, event frame); `## SavedVariables: RolloverDB` |
 | Item reserving | Not started |
 | Roll modifiers | Not started |
-| Guild modifier tracking / sync | Not started |
-| Main window | Empty movable frame titled `Rollover <version>` (`UI\MainFrame.lua`), toggled by `/rollover`, closes on Escape |
+| Guild modifier tracking / sync | Local only: per-member `modifier` stored in `RolloverDB.members` (editable in the roster); no sync yet |
+| Main window | Movable frame `Rollover <version>` (`UI\MainFrame.lua`) showing the guild roster table (class-colored name, class, rank, editable modifier; headers are clickable to sort, default rank ascending) in a ScrollBox; toggled by `/rollover`, closes on Escape. Roster is imported once from the guild (`RolloverDB.rosterImported`); later joins/rank changes are not yet synced |
 | Options UI | Not started |
 
 TODO for the TOC: replace the placeholder `## Notes:` text, add `## SavedVariables:` once persistence exists, consider `## AllowLoadGameType: camelot` (see 4.2).
@@ -213,8 +213,8 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 
 ```
 Rollover.toc
-Rollover.lua            -- bootstrap (loaded last): ns.version, slash command; later event frame, ADDON_LOADED/PLAYER_LOGIN
-Core\                   -- db/defaults/migrations, utils, print, localization
+Rollover.lua            -- bootstrap (loaded last): ns.version, slash command, event frame (ADDON_LOADED -> ns.InitDB, PLAYER_LOGIN, GUILD_ROSTER_UPDATE -> first-time import)
+Core\DB.lua             -- RolloverDB defaults, ns.InitDB, ns.TryImportGuildRoster, ns.GetRosterList, ns.SetModifier
 Modules\Reserves.lua    -- reserve data model + rules
 Modules\Modifiers.lua   -- modifier rules and calculations for rolls
 Modules\Rolls.lua       -- roll detection/parsing/ranking, announcements
@@ -223,7 +223,7 @@ UI\MainFrame.lua        -- main window (ns.ToggleMainFrame); later options panel
 Locales\                -- enUS.lua first
 ```
 
-Data model sketch (SavedVariables `RolloverDB`): `version`, `options`, `reserves[itemID] = { [playerName] = { ... } }`, `modifiers[playerName] = { value, reason, updated, source }`, `sync = { lastFullSync, peers }`. Player keys are `Name-Realm`.
+Data model (SavedVariables `RolloverDB`, currently version 1): `version`, `rosterImported`, `members[Name-Realm] = { class = classFile, rank, rankIndex, modifier }`. Planned additions: `options`, `reserves[itemID] = { [playerName] = { ... } }`, `sync = { lastFullSync, peers }`. Player keys are `Name-Realm`.
 
 Comm protocol sketch: prefix `"Rollover"`; first field is a protocol version, second a message type (e.g. `HELLO`, `MOD_UPDATE`, `MOD_REQUEST`, `RESERVE_UPDATE`); send on `"GUILD"`; only accept state-changing messages from senders with sufficient guild rank. Document each message type here when implemented.
 

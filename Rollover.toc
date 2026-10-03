@@ -3,6 +3,8 @@
 ## Title: Rollover
 ## Notes: Blabla description
 ## Author: Andriod
+## SavedVariables: RolloverDB
 
+Core\DB.lua
 UI\MainFrame.lua
 Rollover.lua
