@@ -32,15 +32,13 @@ local function InitRow(row, data)
         edit:SetSize(MOD_WIDTH, 18)
         edit:SetPoint("LEFT", row.rankText, "RIGHT", 10, 0)
         edit:SetAutoFocus(false)
-        edit:SetMaxLetters(6)
+        edit:SetMaxLetters(32)
         edit:SetJustifyH("CENTER")
         edit:SetScript("OnEnterPressed", edit.ClearFocus)
         edit:SetScript("OnEscapePressed", edit.ClearFocus)
         edit:SetScript("OnEditFocusLost", function(self)
             local value = tonumber(self:GetText())
-            if value then
-                ns.SetModifier(row.key, value)
-            end
+            ns.SetModifier(row.key, value)
             self:SetText(tostring(ns.GetModifier(row.key)))
             self:SetCursorPosition(0)
             self:HighlightText(0, 0)
@@ -62,6 +60,7 @@ local function InitRow(row, data)
     row.rankText:SetText(member.rank or "")
     row.modEdit:SetText(tostring(member.modifier or 0))
     row.modEdit:SetCursorPosition(0)
+    row.modEdit:SetEnabled(ns.CanEditModifiers())
 end
 
 local function UpdateHeaderLabels()
@@ -81,10 +80,52 @@ function ns.RefreshRoster()
     frame.scrollBox:SetDataProvider(CreateDataProvider(list), ScrollBoxConstants.RetainScrollPosition)
 
     if #list == 0 then
-        frame.emptyText:SetText(IsInGuild() and "Loading guild roster..." or "You are not in a guild.")
+        frame.emptyText:SetText(IsInGuild() and ns.L.LOADING_ROSTER or ns.L.NOT_IN_GUILD)
     else
         frame.emptyText:SetText("")
     end
+    ns.RefreshSyncControls()
+end
+
+function ns.RefreshSyncControls()
+    if not frame or not frame:IsShown() or not ns.db then return end
+    frame.syncStatus:SetText(ns.GetSyncStatus())
+    if not frame.publisherEdit:HasFocus() then
+        frame.publisherEdit:SetText(ns.db.sync.publisher or "")
+        frame.publisherEdit:SetCursorPosition(0)
+    end
+    frame.syncButton:SetText(ns.IsSyncPending() and ns.L.CANCEL_SYNC or ns.L.SYNC)
+    frame.syncButton:SetEnabled(ns.IsSyncPending() or (not ns.IsPublisher()
+        and ns.db.sync.publisher ~= nil and IsInGuild()))
+    frame.publisherButton:SetEnabled(not ns.IsSyncPending())
+    frame.publisherEdit:SetEnabled(not ns.IsSyncPending())
+end
+
+local function ShowTools(button)
+    MenuUtil.CreateContextMenu(button, function(_, root)
+        root:CreateButton(ns.L.BACKUP, ns.SaveBackup)
+        root:CreateButton(ns.L.EXPORT, ns.ExportModifiers)
+        local import = root:CreateButton(ns.L.IMPORT, ns.ShowImportFrame)
+        import:SetEnabled(not ns.IsSyncPending())
+        local restore = root:CreateButton(ns.L.RESTORE)
+        restore:SetEnabled(not ns.IsSyncPending())
+        local keys = {}
+        for key in pairs(ns.db.backups) do keys[#keys + 1] = key end
+        table.sort(keys, function(a, b) return a > b end)
+        if #keys == 0 then
+            restore:CreateTitle(ns.L.NO_BACKUPS)
+        else
+            restore:SetScrollMode(300)
+            for _, key in ipairs(keys) do
+                restore:CreateButton(key, function() ns.RestoreBackup(key) end)
+            end
+        end
+        root:CreateDivider()
+        local publish = root:CreateButton(ns.L.PUBLISH_SELF, function()
+            ns.SelectPublisher(ns.GetPlayerName())
+        end)
+        publish:SetEnabled(not ns.IsSyncPending() and IsInGuild())
+    end)
 end
 
 local function CreateHeader(parent, key, text, width, justify)
@@ -130,10 +171,66 @@ local function CreateMainFrame()
         frame.TitleText:SetText(title)
     end
 
+    local publisher = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+    publisher:SetSize(180, 22)
+    publisher:SetPoint("TOPLEFT", 20, -33)
+    publisher:SetAutoFocus(false)
+    publisher:SetMaxLetters(96)
+    publisher:SetScript("OnEscapePressed", publisher.ClearFocus)
+    publisher:SetScript("OnEnterPressed", function(self)
+        if ns.SelectPublisher(self:GetText()) then self:ClearFocus() end
+    end)
+    publisher:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(ns.L.PUBLISHER_HINT)
+        GameTooltip:Show()
+    end)
+    publisher:SetScript("OnLeave", GameTooltip_Hide)
+    frame.publisherEdit = publisher
+
+    local select = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    select:SetSize(60, 24)
+    select:SetPoint("LEFT", publisher, "RIGHT", 8, 0)
+    select:SetText(ns.L.SET_PUBLISHER)
+    select:SetScript("OnClick", function()
+        if ns.SelectPublisher(publisher:GetText()) then publisher:ClearFocus() end
+    end)
+    frame.publisherButton = select
+
+    local sync = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    sync:SetSize(60, 24)
+    sync:SetPoint("LEFT", select, "RIGHT", 6, 0)
+    sync:SetText(ns.L.SYNC)
+    sync:SetScript("OnClick", function()
+        if ns.IsSyncPending() then ns.CancelSync() else ns.RequestSync() end
+    end)
+    frame.syncButton = sync
+
+    local tools = CreateFrame("Button", nil, frame)
+    tools:SetSize(24, 24)
+    tools:SetPoint("TOPRIGHT", -14, -32)
+    tools:SetNormalTexture("Interface\\Icons\\INV_Misc_Gear_01")
+    tools:SetPushedTexture("Interface\\Icons\\INV_Misc_Gear_01")
+    tools:GetPushedTexture():SetVertexColor(0.7, 0.7, 0.7)
+    tools:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    tools:SetScript("OnClick", ShowTools)
+    tools:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+        GameTooltip:SetText(ns.L.TOOLS)
+        GameTooltip:Show()
+    end)
+    tools:SetScript("OnLeave", GameTooltip_Hide)
+
+    frame.syncStatus = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    frame.syncStatus:SetPoint("TOPLEFT", 14, -61)
+    frame.syncStatus:SetPoint("TOPRIGHT", -30, -61)
+    frame.syncStatus:SetHeight(34)
+    frame.syncStatus:SetJustifyH("LEFT")
+
     -- Roster table: header row, then a scrolling list.
     local header = CreateFrame("Frame", nil, frame)
-    header:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -32)
-    header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -30, -32)
+    header:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -101)
+    header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -30, -101)
     header:SetHeight(18)
     local nameHeader = CreateHeader(header, "name", "Player", NAME_WIDTH, "LEFT")
     nameHeader:SetPoint("LEFT", 4, 0)

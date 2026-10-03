@@ -20,14 +20,15 @@ Update this section as features land.
 
 | Area | Status |
 | --- | --- |
-| TOC / load | `Core\Utils.lua`, `Core\DB.lua`, `UI\*.lua`, `Core\Commands.lua`, `Core\Events.lua`, `Rollover.lua` (loaded last: `ns.version`); `## SavedVariables: RolloverDB` |
+| TOC / load | `Locales\enUS.lua`, `Core\Utils.lua`, `Core\DB.lua`, `Modules\GuildSync.lua`, `UI\*.lua`, `Core\Commands.lua`, `Core\Events.lua`, `Rollover.lua` (loaded last: `ns.version`); `## SavedVariables: RolloverDB` |
 | Item reserving | Not started |
 | Roll modifiers | Roll popup (`UI\RollFrame.lua`): `/rollover <item-link>` shows the item with Pass and `Roll (+x)` buttons; Roll does `RandomRoll(1, 100)`, reads the result from `CHAT_MSG_SYSTEM` and prints `roll + modifier` in chat as a `Rollover:` message (no /say: the client blocks SAY from event handlers outside instances) |
-| Guild modifier tracking / sync | Local only: numeric modifiers stored in `RolloverDB.modifiers[Name-Realm]` (editable in the roster); no sync yet |
-| Main window | Movable, resizable (bottom-right grip, 480x250 to 900x1500; size not persisted) frame `Rollover <version>` (`UI\MainFrame.lua`) showing the guild roster table (class-colored name, class, rank, editable modifier; headers are clickable to sort, default rank ascending) in a ScrollBox; toggled by `/rollover`, closes on Escape. Opening requests the guild roster and merges current guild data with saved modifiers; roster events refresh the table only while visible. Class/rank data is not persisted |
+| Guild modifier tracking / sync | One account-wide modifier table (not guild-scoped). Explicit trusted publisher selection; manual WHISPER sync streams modifier values directly after an automatic backup. Followers have read-only roster edits, but may explicitly import JSON or restore backups. No automatic sync, deltas, revisions, or rollback |
+| Main window | Movable, resizable (bottom-right grip, 480x250 to 900x1500; size not persisted) frame `Rollover <version>` (`UI\MainFrame.lua`). Top row: publisher name field, Set, Sync/Cancel, and a right-aligned gear-icon Tools button (tooltip `Tools`); below it a sync status line. Then the guild roster table (class-colored name, class, rank, editable modifier; headers are clickable to sort, default rank ascending) in a ScrollBox; toggled by `/rollover`, closes on Escape. Opening requests the guild roster and merges current guild data with saved modifiers; roster events refresh the table only while visible. Class/rank data is not persisted |
 | Options UI | Not started |
+| Tools / recovery | Gear-icon Tools menu in the main window: save backup, export JSON, import JSON, restore backup (submenu of dated backups, newest first), publish myself. Export and import each have their own window (`UI\ExportFrame.lua`: copy-only text box; `UI\ImportFrame.lua`: paste box plus Import button, hidden after a successful import). Imports/restores also back up the previous state. JSON replaces the modifier table; backups are deep copies and remain until manually removed from SavedVariables |
 
-TODO for the TOC: replace the placeholder `## Notes:` text, add `## SavedVariables:` once persistence exists, consider `## AllowLoadGameType: camelot` (see 4.2).
+TODO for the TOC: replace the placeholder `## Notes:` text (the example in 4.2 shows the intended wording) and consider `## AllowLoadGameType: camelot` (see 4.2).
 
 ## 3. Platform facts (verified against warcraft.wiki.gg, Oct 2026)
 
@@ -63,6 +64,17 @@ Plain text. `## Directive: value` metadata, `# comment`, then a list of files lo
 ## Version: 0.0.1
 ## SavedVariables: RolloverDB
 
+Locales\enUS.lua
+Core\Utils.lua
+Core\DB.lua
+Modules\GuildSync.lua
+UI\MainFrame.lua
+UI\DebugFrame.lua
+UI\ExportFrame.lua
+UI\ImportFrame.lua
+UI\RollFrame.lua
+Core\Commands.lua
+Core\Events.lua
 Rollover.lua
 ```
 
@@ -123,7 +135,7 @@ f:RegisterEvent("ADDON_LOADED")
 
 ```lua
 -- TOC: ## SavedVariables: RolloverDB
-local defaults = { version = 1, reserves = {}, modifiers = {}, options = {} }
+local defaults = { version = 1, modifiers = {}, backups = {}, sync = {} }
 
 function f:ADDON_LOADED(loadedName)
     if loadedName ~= addonName then return end
@@ -135,7 +147,7 @@ function f:ADDON_LOADED(loadedName)
 end
 ```
 
-Pitfalls: variables are global and are **overwritten after your files run** (never rely on defaults set at file scope); only strings, numbers, booleans and tables persist (no functions/userdata; shared table references become separate copies); keep a `version` field and migrate on load. Files live in `WTF\Account\<ACCOUNT>\SavedVariables\Rollover.lua` (account) and `WTF\Account\<ACCOUNT>\<Realm>\<Char>\SavedVariables\Rollover.lua` (per character). Debug: `/dump RolloverDB`.
+Pitfalls: variables are global and are **overwritten after your files run** (never rely on defaults set at file scope); only strings, numbers, booleans and tables persist (no functions/userdata; shared table references become separate copies); keep a `version` field and migrate on load once the addon has released data to preserve (this repo does not migrate development data, see section 7). Files live in `WTF\Account\<ACCOUNT>\SavedVariables\Rollover.lua` (account) and `WTF\Account\<ACCOUNT>\<Realm>\<Char>\SavedVariables\Rollover.lua` (per character). Debug: `/dump RolloverDB`.
 
 ### 4.6 Slash commands
 
@@ -169,15 +181,15 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 
 - `C_ChatInfo.RegisterAddonMessagePrefix(prefix)` (<= 16 chars; use `"Rollover"`) before receiving; listen to `CHAT_MSG_ADDON(prefix, text, channel, sender, ...)`.
 - `C_ChatInfo.SendAddonMessage(prefix, message, chatType, target)`: message <= 255 bytes; chat types here: `"GUILD"`, `"OFFICER"`, `"PARTY"`, `"RAID"`, `"INSTANCE_CHAT"`, `"WHISPER"`. (`"CHANNEL"` is disabled on Classic-family clients; check whether Forever allows it before using it.)
-- Returns an `Enum.SendAddonMessageResult` (0 success, 3 throttled, 5 not in group, 10 not in guild, 11 `AddOnMessageLockdown`, 12 target offline). **Check the result.**
+- Returns an `Enum.SendAddonMessageResult` (0 `Success`, 3 `AddonMessageThrottle`, 5 not in group, 10 not in guild, 11 `AddOnMessageLockdown`, 12 target offline). **Check the result.**
 - Throttle: each prefix has an allowance of 10 messages, regained at 1/sec (server may change this). **Queue and rate-limit**; for production use ChatThrottleLib or AceComm.
-- Serialize/compress for large payloads: `C_EncodingUtil.SerializeCBOR/SerializeJSON`, `C_EncodingUtil.CompressString` (verify availability on Forever), or LibSerialize + LibDeflate.
+- Serialize/compress for large payloads: `C_EncodingUtil.SerializeCBOR/SerializeJSON`, `C_EncodingUtil.CompressString` (verify availability on Forever), or LibSerialize + LibDeflate. Rollover uses `SerializeJSON` / `DeserializeJSON` for import/export only; the sync stream is plain tab-separated text. These JSON functions are documented in Blizzard's live API docs but not yet verified on the Forever beta; missing APIs are reported to the player instead of erroring.
 - Treat all incoming messages as untrusted: validate sender (guild rank / group leader), version and field types before applying.
 - `SendAddonMessageLogged` should be used for user-generated free text (reports to Blizzard GMs); not needed for structured data.
 
 ### 4.11 Guild data
 
-`C_GuildInfo.GuildRoster()` requests a roster (ignored if called <10 s apart), then `GUILD_ROSTER_UPDATE` fires; read members with `GetNumGuildMembers()` and `GetGuildRosterInfo(i)` -> `name (Name-Realm), rankName, rankIndex, level, classDisplayName, zone, publicNote, officerNote, isOnline, status, classFileName, achievementPoints, achievementRank, isMobile, canSoR, repStanding, guid`. Guild notes (`publicNote`/`officerNote`) are a possible low-tech persistence channel for modifier data; reading officer notes requires permission.
+`C_GuildInfo.GuildRoster()` requests a roster (ignored if called <10 s apart), then `GUILD_ROSTER_UPDATE` fires; read members with `GetNumGuildMembers()` and `GetGuildRosterInfo(i)` -> `name, rankName, rankIndex, level, classDisplayName, zone, publicNote, officerNote, isOnline, status, classFileName, achievementPoints, achievementRank, isMobile, canSoR, repStanding, guid`. **Observed on the Forever beta: `name` is "First Last" with no realm suffix** (e.g. `Andriod En`); other clients return `Name-Realm`. Never assume or require a `-Realm` part; treat the name as an opaque string and key data by exactly what this call returns. Guild notes (`publicNote`/`officerNote`) are a possible low-tech persistence channel for modifier data; reading officer notes requires permission.
 
 ### 4.12 Loot and rolls
 
@@ -194,6 +206,7 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 - Simulate restrictions: CVars `addonChatRestrictionsForced`, `addonCombatRestrictionsForced`, `addonMapRestrictionsForced`, `addonEncounterRestrictionsForced`, `addonPvPMatchRestrictionsForced`, `addonChallengeModeRestrictionsForced` (set to 1; not persisted across restarts).
 - Editor setup: VS Code + **Lua** extension (sumneko) for IntelliSense; the **WoW API** extension (Ketho) adds WoW API definitions. Reference Blizzard code: `wow-ui-source` (`forever` branch) and [Ketho/BlizzardInterfaceResources](https://github.com/Ketho/BlizzardInterfaceResources).
 - Testing multi-player features (comms, guild sync) needs at least two clients/accounts; use `"WHISPER"` to yourself to smoke-test comm code.
+- Regression tests: `Tests\StateSync.lua` runs outside the game against mocked WoW APIs (two clients, timers, message delivery): `lua .\Tests\StateSync.lua .` from the addon folder, or `npm exec --yes --package=fengari-node-cli -- fengari .\Tests\StateSync.lua .` without a Lua install. Mocks do not prove real client behavior (JSON parsing, menu layout, whisper sender format); verify those in game.
 - Do not commit `WTF/` data or screenshots; the repo is only this addon folder.
 
 ## 6. Coding conventions for this repo
@@ -202,36 +215,51 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 - Slash commands: `/rollover` toggles the main window; `/rollover <item-link>` opens the roll popup for that item; `/rollover debug` opens the debug log window (log via `ns.Debug`); `/rollover debug roll` opens the roll popup with a test item.
 - Cache frequently used globals as locals (`local format, pairs = format, pairs`) only when it matters for hot paths.
 - One responsibility per file; list files in the TOC in dependency order (core -> data -> logic -> UI -> init).
-- All user-visible text goes through a localization table (`ns.L`) once the first string is added; default locale `enUS`.
+- All user-visible text goes through a localization table (`ns.L`, `Locales\enUS.lua`); default locale `enUS`. Every key in `enUS.lua` must be used; remove keys when their code goes away. Not yet migrated (legacy hardcoded English): `UI\RollFrame.lua`, `UI\DebugFrame.lua`, the main window title and roster column headers, and the `Usage:` line in `Core\Commands.lua`. Put new strings in `ns.L`.
+- Each UI window lives in its own file and creates its own frame (`UI\MainFrame.lua`, `UI\ExportFrame.lua`, `UI\ImportFrame.lua`, `UI\RollFrame.lua`, `UI\DebugFrame.lua`); do not multiplex one window for several purposes.
+- Modules call each other through `ns` at runtime only (all files are loaded before `ADDON_LOADED`), so no `if ns.Func then` load-order guards.
 - Chat output via a single helper (`ns.Print`) with a colored `Rollover:` prefix.
 - No `OnUpdate` unless unavoidable; never do heavy work per frame.
 - Never block on uncached item data; use async item loading.
 - Wrap anything touching restricted/secret data in guards (section 8). Fail soft: do nothing rather than throw errors.
-- Keep the stored data model versioned (`RolloverDB.version`) and write migrations.
+- Keep the stored data model versioned (`RolloverDB.version`). Write migrations once real users have data; until then (addon version 0.0.1, no users) development data is not migrated and obsolete test SavedVariables are reset manually.
 - Bump `## Version:` in the TOC on user-visible changes.
 
-## 7. Planned architecture (adjust as it is built)
+## 7. Architecture (files marked "planned" do not exist yet)
 
 ```
 Rollover.toc
 Rollover.lua            -- bootstrap (loaded last): ns.version
+Locales\enUS.lua        -- ns.L strings (tools, recovery, sync, roster status)
 Core\Utils.lua          -- shared helpers (ns.Print)
-Core\Commands.lua       -- /rollover slash command dispatch
-Core\Events.lua         -- event frame (ADDON_LOADED -> ns.InitDB, GUILD_ROSTER_UPDATE -> visible roster refresh)
-Core\DB.lua             -- modifier-only RolloverDB defaults, ns.InitDB, ns.RequestGuildRoster, ns.GetRosterList, ns.GetModifier, ns.SetModifier
-Modules\Reserves.lua    -- reserve data model + rules
-Modules\Modifiers.lua   -- modifier rules and calculations for rolls
-Modules\Rolls.lua       -- roll detection/parsing/ranking, announcements
-Modules\GuildSync.lua   -- addon messages, versioning, throttled send queue, roster integration
-UI\MainFrame.lua        -- main window (ns.ToggleMainFrame); later options panel, reserve list, tooltip hooks
-UI\RollFrame.lua        -- roll-for-item popup (ns.ShowRollFrame(link)); Core\DB.lua also has ns.GetPlayerModifier
+Core\DB.lua             -- defaults/ns.InitDB, modifier get/set + validation, edit permissions, guild-member resolution, dated backups, JSON import/export, roster merge (ns.GetRosterList), player helpers
+Modules\GuildSync.lua   -- publisher selection, manual streaming WHISPER sync, bounded send queue and failure reporting
+UI\MainFrame.lua        -- roster, gear-icon Tools menu, publisher field/Set button, Sync/Cancel button, status line
 UI\DebugFrame.lua       -- ns.Debug(msg) in-memory log (200 lines) + copyable window (ns.ToggleDebugFrame, `/rollover debug`)
-Locales\                -- enUS.lua first
+UI\ExportFrame.lua      -- copy-only JSON window (ns.ShowExportFrame(text))
+UI\ImportFrame.lua      -- paste-JSON window with Import button (ns.ShowImportFrame())
+UI\RollFrame.lua        -- roll-for-item popup (ns.ShowRollFrame(link)); Core\DB.lua has ns.GetPlayerModifier
+Core\Commands.lua       -- /rollover slash command dispatch
+Core\Events.lua         -- ADDON_LOADED (ns.InitDB, ns.InitGuildSync, event registration), CHAT_MSG_ADDON, guild roster/guild changes -> sync context check + visible roster refresh
+Tests\StateSync.lua     -- standalone mocked two-client Lua regression harness (not loaded by TOC)
+Modules\Reserves.lua    -- planned: reserve data model + rules
+Modules\Modifiers.lua   -- planned: modifier rules and calculations for rolls
+Modules\Rolls.lua       -- planned: roll detection/parsing/ranking, announcements
 ```
 
-Data model (SavedVariables `RolloverDB`, currently version 1): `version`, `modifiers[Name-Realm] = number`. No migration from the earlier development-only member records; reset old test SavedVariables when testing this shape. Display rows are built from the current guild roster, with missing modifiers treated as 0 without creating saved entries. Saved modifiers for absent members are retained, but those members are not displayed. Player modifier lookup works without opening the roster window. Planned additions: `options`, `reserves[itemID] = { [playerName] = { ... } }`, `sync = { lastFullSync, peers }`. Player keys are `Name-Realm`.
+Data model (SavedVariables `RolloverDB`, development version 1; addon version remains 0.0.1): `version`, `modifiers[name] = number`, `backups[date-time] = copy of modifiers`, `sync = { publisher = name, lastSync = server timestamp }`, where `name` is the guild roster name exactly as `GetGuildRosterInfo` returns it (no realm suffix on the Forever beta, see 4.11). Date keys include seconds and a suffix when multiple backups share a second. No development-data migrations; existing modifier tables are preserved and new fields default empty. Reset obsolete test SavedVariables manually. No guild state, class, rank or rankIndex is saved. Display rows merge current guild data with saved modifiers (missing values display as 0). Absent-member modifiers are retained locally and included in export/sync. Publishers also send explicit zeros for current roster members without saved modifiers. New imports must be JSON objects mapping roster names (non-empty, at most 96 bytes, no control characters or `|`) to finite numbers (at most 1000 entries / 200000 input bytes). JSON uses `C_EncodingUtil.SerializeJSON` / `DeserializeJSON`; missing APIs and parse failures are reported explicitly. Planned additions: `options`, `reserves[itemID] = { [playerName] = { ... } }`. Player keys are roster names (see above).
 
-Comm protocol sketch: prefix `"Rollover"`; first field is a protocol version, second a message type (e.g. `HELLO`, `MOD_UPDATE`, `MOD_REQUEST`, `RESERVE_UPDATE`); send on `"GUILD"`; only accept state-changing messages from senders with sufficient guild rank. Document each message type here when implemented.
+Edit permissions: roster edits are allowed when no publisher is selected or you are the selected publisher, and never while receiving a sync. Followers cannot edit but can still import JSON and restore backups. Any local change clears `sync.lastSync`.
+
+Comm protocol: prefix `"Rollover"`, protocol `1`, tab-separated fields, WHISPER only. Every message starts `1<TAB>type<TAB>requestID`; types:
+
+- `REQUEST`: no further fields; asks a guild member publishing their own state for modifiers.
+- `BEGIN`: entry count (0-1000); clears the receiver's modifier table after the pre-request backup.
+- `VALUE`: sequential index, roster name, finite modifier; applies immediately. Duplicate names and out-of-order values fail the transfer.
+- `END`: entry count; verifies completeness, records `lastSync`. No commit step.
+- `ERROR`: `NOT_PUBLISHER`, `BUSY` or `INVALID_TRANSFER`.
+
+Only the explicitly selected publisher's actual chat sender is accepted for the active request ID; requesters/senders must be in the current local guild roster. This assumes the `CHAT_MSG_ADDON` WHISPER sender string equals the `GetGuildRosterInfo` name; **unverified on the Forever beta**, so check it first if sync never completes. Guild identity is checked transiently during transfers, never stored as guild state. Names/payload lengths/numeric values/counts are bounded. Secret payloads are ignored. Sends run at 1/sec with at most three queued tasks and a 30-minute transfer timeout. A requester that asks again within 30 seconds gets an `ERROR BUSY` reply. `Enum.SendAddonMessageResult.AddonMessageThrottle` (not `Throttle`) and `AddOnMessageLockdown` retry after 5 seconds. Other send errors are reported. Cancel, guild loss, malformed messages and timeout end receiving without rollback; partial modifiers remain and can be restored using Tools. Import/restore/source changes are blocked only while receiving. Sync status says when the last transfer completed, not that the publisher has no newer edits.
 
 ## 8. Restrictions in Forever that affect this addon
 
@@ -268,7 +296,7 @@ Before finishing any change that does one of the following, update this file in 
 
 - [ ] Added/removed/renamed a file or module -> section 7 and the TOC example.
 - [ ] Shipped or started a feature -> section 2 status table.
-- [ ] Added a SavedVariable or changed its shape -> sections 4.5 / 7 (and bump `RolloverDB.version` + migration).
+- [ ] Added a SavedVariable or changed its shape -> sections 4.5 / 7 (migrate only once real users have data, see section 6).
 - [ ] Added a slash command or comm message type -> document it here.
 - [ ] Learned a new API quirk or a Forever-specific behavior (especially restrictions) -> sections 3 / 4 / 8.
 - [ ] Changed a convention -> section 6.

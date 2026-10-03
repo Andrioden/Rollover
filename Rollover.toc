@@ -5,10 +5,14 @@
 ## Author: Andriod
 ## SavedVariables: RolloverDB
 
+Locales\enUS.lua
 Core\Utils.lua
 Core\DB.lua
+Modules\GuildSync.lua
 UI\MainFrame.lua
 UI\DebugFrame.lua
+UI\ExportFrame.lua
+UI\ImportFrame.lua
 UI\RollFrame.lua
 Core\Commands.lua
 Core\Events.lua
