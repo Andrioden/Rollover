@@ -2,12 +2,12 @@ local addonName, ns = ...
 
 local frame
 
-local NAME_WIDTH, CLASS_WIDTH, RANK_WIDTH, MOD_WIDTH = 150, 90, 110, 60
+local NAME_WIDTH, CLASS_WIDTH, RANK_WIDTH, MOD_WIDTH = 170, 90, 110, 60
 local PUBLISHER_SIZE, PUBLISHER_GAP = 16, 2
 -- Gap between the name column and the class column; the publisher button sits inside it.
 local CLASS_OFFSET = PUBLISHER_GAP * 2 + PUBLISHER_SIZE
 local ROW_HEIGHT = 22
--- Row content is 448 wide (+44 for margins and scrollbar); the defaults keep a little slack.
+-- Row content is 468 wide (+44 for margins and scrollbar); the defaults keep a little slack.
 local FRAME_WIDTH, FRAME_HEIGHT = 520, 400
 local MIN_WIDTH, MIN_HEIGHT = 500, 250
 local MAX_WIDTH, MAX_HEIGHT = 900, 1500
