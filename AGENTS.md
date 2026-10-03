@@ -20,7 +20,7 @@ Update this section as features land.
 
 | Area | Status |
 | --- | --- |
-| TOC / load | `Core\DB.lua`, `UI\MainFrame.lua`, `Rollover.lua` (loaded last: `ns.version`, slash command, event frame); `## SavedVariables: RolloverDB` |
+| TOC / load | `Core\Utils.lua`, `Core\DB.lua`, `UI\*.lua`, `Core\Commands.lua`, `Core\Events.lua`, `Rollover.lua` (loaded last: `ns.version`); `## SavedVariables: RolloverDB` |
 | Item reserving | Not started |
 | Roll modifiers | Roll popup (`UI\RollFrame.lua`): `/rollover <item-link>` shows the item with Pass and `Roll (+x)` buttons; Roll does `RandomRoll(1, 100)`, reads the result from `CHAT_MSG_SYSTEM` and prints `roll + modifier` in chat as a `Rollover:` message (no /say: the client blocks SAY from event handlers outside instances) |
 | Guild modifier tracking / sync | Local only: per-member `modifier` stored in `RolloverDB.members` (editable in the roster); no sync yet |
@@ -214,7 +214,10 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 
 ```
 Rollover.toc
-Rollover.lua            -- bootstrap (loaded last): ns.version, slash command, event frame (ADDON_LOADED -> ns.InitDB, PLAYER_LOGIN, GUILD_ROSTER_UPDATE -> first-time import)
+Rollover.lua            -- bootstrap (loaded last): ns.version
+Core\Utils.lua          -- shared helpers (ns.Print)
+Core\Commands.lua       -- /rollover slash command dispatch
+Core\Events.lua         -- event frames (ADDON_LOADED -> ns.InitDB, PLAYER_LOGIN, GUILD_ROSTER_UPDATE -> first-time import)
 Core\DB.lua             -- RolloverDB defaults, ns.InitDB, ns.TryImportGuildRoster, ns.GetRosterList, ns.SetModifier
 Modules\Reserves.lua    -- reserve data model + rules
 Modules\Modifiers.lua   -- modifier rules and calculations for rolls

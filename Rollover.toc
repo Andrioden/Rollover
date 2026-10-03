@@ -5,8 +5,11 @@
 ## Author: Andriod
 ## SavedVariables: RolloverDB
 
+Core\Utils.lua
 Core\DB.lua
 UI\MainFrame.lua
 UI\DebugFrame.lua
 UI\RollFrame.lua
+Core\Commands.lua
+Core\Events.lua
 Rollover.lua
