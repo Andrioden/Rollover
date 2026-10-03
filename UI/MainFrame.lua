@@ -40,7 +40,12 @@ local function InitRow(row, data)
                 member.modifier = value
             end
             self:SetText(tostring(member.modifier))
+            self:SetCursorPosition(0)
             self:HighlightText(0, 0)
+        end)
+        -- A recycled/resized edit box can keep a stale horizontal scroll and render blank.
+        edit:SetScript("OnShow", function(self)
+            self:SetCursorPosition(0)
         end)
         row.modEdit = edit
     end
@@ -54,6 +59,7 @@ local function InitRow(row, data)
     row.classText:SetText(member.class and LOCALIZED_CLASS_NAMES_MALE[member.class] or "")
     row.rankText:SetText(member.rank or "")
     row.modEdit:SetText(tostring(member.modifier or 0))
+    row.modEdit:SetCursorPosition(0)
 end
 
 local function UpdateHeaderLabels()
@@ -105,6 +111,8 @@ local function CreateMainFrame()
     frame = CreateFrame("Frame", "RolloverMainFrame", UIParent, "BasicFrameTemplateWithInset")
     frame:SetSize(500, 400)
     frame:SetPoint("CENTER")
+    frame:SetResizable(true)
+    frame:SetResizeBounds(480, 250, 900, 1500)
     frame:SetFrameStrata("HIGH")
     frame:SetClampedToScreen(true)
     frame:SetMovable(true)
@@ -137,7 +145,7 @@ local function CreateMainFrame()
 
     local scrollBox = CreateFrame("Frame", nil, frame, "WowScrollBoxList")
     scrollBox:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -2)
-    scrollBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -30, 14)
+    scrollBox:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -30, 22)
 
     local scrollBar = CreateFrame("EventFrame", nil, frame, "MinimalScrollBar")
     scrollBar:SetPoint("TOPLEFT", scrollBox, "TOPRIGHT", 6, 0)
@@ -153,6 +161,15 @@ local function CreateMainFrame()
 
     frame.emptyText = frame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
     frame.emptyText:SetPoint("CENTER", scrollBox)
+
+    local grip = CreateFrame("Button", nil, frame)
+    grip:SetSize(16, 16)
+    grip:SetPoint("BOTTOMRIGHT", -3, 3)
+    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    grip:SetScript("OnMouseDown", function() frame:StartSizing("BOTTOMRIGHT") end)
+    grip:SetScript("OnMouseUp", function() frame:StopMovingOrSizing() end)
 
     frame:SetScript("OnShow", function()
         ns.RequestGuildRoster()

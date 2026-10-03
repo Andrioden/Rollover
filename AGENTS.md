@@ -24,7 +24,7 @@ Update this section as features land.
 | Item reserving | Not started |
 | Roll modifiers | Not started |
 | Guild modifier tracking / sync | Local only: per-member `modifier` stored in `RolloverDB.members` (editable in the roster); no sync yet |
-| Main window | Movable frame `Rollover <version>` (`UI\MainFrame.lua`) showing the guild roster table (class-colored name, class, rank, editable modifier; headers are clickable to sort, default rank ascending) in a ScrollBox; toggled by `/rollover`, closes on Escape. Roster is imported once from the guild (`RolloverDB.rosterImported`); later joins/rank changes are not yet synced |
+| Main window | Movable, resizable (bottom-right grip, 480x250 to 900x1500; size not persisted) frame `Rollover <version>` (`UI\MainFrame.lua`) showing the guild roster table (class-colored name, class, rank, editable modifier; headers are clickable to sort, default rank ascending) in a ScrollBox; toggled by `/rollover`, closes on Escape. Roster is imported once from the guild (`RolloverDB.rosterImported`); later joins/rank changes are not yet synced |
 | Options UI | Not started |
 
 TODO for the TOC: replace the placeholder `## Notes:` text, add `## SavedVariables:` once persistence exists, consider `## AllowLoadGameType: camelot` (see 4.2).
