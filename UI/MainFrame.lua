@@ -3,9 +3,13 @@ local addonName, ns = ...
 local frame
 
 local NAME_WIDTH, CLASS_WIDTH, RANK_WIDTH, MOD_WIDTH = 150, 90, 110, 60
+local PUBLISHER_SIZE, PUBLISHER_GAP = 16, 2
+-- Gap between the name column and the class column; the publisher button sits inside it.
+local CLASS_OFFSET = PUBLISHER_GAP * 2 + PUBLISHER_SIZE
 local ROW_HEIGHT = 22
-local FRAME_WIDTH, FRAME_HEIGHT = 500, 400
-local MIN_WIDTH, MIN_HEIGHT = 480, 250
+-- Row content is 448 wide (+44 for margins and scrollbar); the defaults keep a little slack.
+local FRAME_WIDTH, FRAME_HEIGHT = 520, 400
+local MIN_WIDTH, MIN_HEIGHT = 500, 250
 local MAX_WIDTH, MAX_HEIGHT = 900, 1500
 
 local sortKey, sortAscending = "rank", true
@@ -18,8 +22,25 @@ local function InitRow(row, data)
         row.nameText:SetWidth(NAME_WIDTH)
         row.nameText:SetJustifyH("LEFT")
 
+        -- Crown toggle: bright for the current publisher, dim for everyone else.
+        local publisher = CreateFrame("Button", nil, row)
+        publisher:SetSize(PUBLISHER_SIZE, PUBLISHER_SIZE)
+        publisher:SetPoint("LEFT", row.nameText, "RIGHT", PUBLISHER_GAP, 0)
+        publisher.icon = publisher:CreateTexture(nil, "ARTWORK")
+        publisher.icon:SetAllPoints()
+        publisher.icon:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
+        publisher:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+        publisher:SetScript("OnClick", function() ns.SelectPublisher(row.key) end)
+        publisher:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(row.isPublisher and ns.L.CURRENT_PUBLISHER or ns.L.SET_PUBLISHER)
+            GameTooltip:Show()
+        end)
+        publisher:SetScript("OnLeave", GameTooltip_Hide)
+        row.publisherButton = publisher
+
         row.classText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        row.classText:SetPoint("LEFT", row.nameText, "RIGHT", 4, 0)
+        row.classText:SetPoint("LEFT", row.nameText, "RIGHT", CLASS_OFFSET, 0)
         row.classText:SetWidth(CLASS_WIDTH)
         row.classText:SetJustifyH("LEFT")
 
@@ -55,6 +76,10 @@ local function InitRow(row, data)
     local shortName = Ambiguate(data.name, "short")
 
     row.key = data.name
+    row.isPublisher = ns.db.sync.publisher == data.name
+    row.publisherButton.icon:SetDesaturated(not row.isPublisher)
+    row.publisherButton.icon:SetAlpha(row.isPublisher and 1 or 0.35)
+    row.publisherButton:SetEnabled(not ns.IsSyncPending())
     row.nameText:SetText(color and color:WrapTextInColorCode(shortName) or shortName)
     row.classText:SetText(member.class and LOCALIZED_CLASS_NAMES_MALE[member.class] or "")
     row.rankText:SetText(member.rank or "")
@@ -84,25 +109,16 @@ function ns.RefreshRoster()
     else
         frame.emptyText:SetText("")
     end
-    ns.RefreshSyncControls()
-end
-
-function ns.RefreshSyncControls()
-    if not frame or not frame:IsShown() or not ns.db then return end
-    frame.syncStatus:SetText(ns.GetSyncStatus())
-    if not frame.publisherEdit:HasFocus() then
-        frame.publisherEdit:SetText(ns.db.sync.publisher or "")
-        frame.publisherEdit:SetCursorPosition(0)
-    end
-    frame.syncButton:SetText(ns.IsSyncPending() and ns.L.CANCEL_SYNC or ns.L.SYNC)
-    frame.syncButton:SetEnabled(ns.IsSyncPending() or (not ns.IsPublisher()
-        and ns.db.sync.publisher ~= nil and IsInGuild()))
-    frame.publisherButton:SetEnabled(not ns.IsSyncPending())
-    frame.publisherEdit:SetEnabled(not ns.IsSyncPending())
 end
 
 local function ShowTools(button)
     MenuUtil.CreateContextMenu(button, function(_, root)
+        if ns.IsSyncPending() then
+            root:CreateButton(ns.L.CANCEL_SYNC, ns.CancelSync)
+        else
+            root:CreateButton(ns.L.SYNC_FROM_PUBLISHER, ns.RequestSync)
+        end
+        root:CreateDivider()
         root:CreateButton(ns.L.BACKUP, ns.SaveBackup)
         root:CreateButton(ns.L.EXPORT, ns.ExportModifiers)
         local import = root:CreateButton(ns.L.IMPORT, ns.ShowImportFrame)
@@ -120,11 +136,6 @@ local function ShowTools(button)
                 restore:CreateButton(key, function() ns.RestoreBackup(key) end)
             end
         end
-        root:CreateDivider()
-        local publish = root:CreateButton(ns.L.PUBLISH_SELF, function()
-            ns.SelectPublisher(ns.GetPlayerName())
-        end)
-        publish:SetEnabled(not ns.IsSyncPending() and IsInGuild())
     end)
 end
 
@@ -171,41 +182,6 @@ local function CreateMainFrame()
         frame.TitleText:SetText(title)
     end
 
-    local publisher = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
-    publisher:SetSize(180, 22)
-    publisher:SetPoint("TOPLEFT", 20, -33)
-    publisher:SetAutoFocus(false)
-    publisher:SetMaxLetters(96)
-    publisher:SetScript("OnEscapePressed", publisher.ClearFocus)
-    publisher:SetScript("OnEnterPressed", function(self)
-        if ns.SelectPublisher(self:GetText()) then self:ClearFocus() end
-    end)
-    publisher:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText(ns.L.PUBLISHER_HINT)
-        GameTooltip:Show()
-    end)
-    publisher:SetScript("OnLeave", GameTooltip_Hide)
-    frame.publisherEdit = publisher
-
-    local select = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    select:SetSize(60, 24)
-    select:SetPoint("LEFT", publisher, "RIGHT", 8, 0)
-    select:SetText(ns.L.SET_PUBLISHER)
-    select:SetScript("OnClick", function()
-        if ns.SelectPublisher(publisher:GetText()) then publisher:ClearFocus() end
-    end)
-    frame.publisherButton = select
-
-    local sync = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    sync:SetSize(60, 24)
-    sync:SetPoint("LEFT", select, "RIGHT", 6, 0)
-    sync:SetText(ns.L.SYNC)
-    sync:SetScript("OnClick", function()
-        if ns.IsSyncPending() then ns.CancelSync() else ns.RequestSync() end
-    end)
-    frame.syncButton = sync
-
     local tools = CreateFrame("Button", nil, frame)
     tools:SetSize(24, 24)
     tools:SetPoint("TOPRIGHT", -14, -32)
@@ -221,21 +197,15 @@ local function CreateMainFrame()
     end)
     tools:SetScript("OnLeave", GameTooltip_Hide)
 
-    frame.syncStatus = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    frame.syncStatus:SetPoint("TOPLEFT", 14, -61)
-    frame.syncStatus:SetPoint("TOPRIGHT", -30, -61)
-    frame.syncStatus:SetHeight(34)
-    frame.syncStatus:SetJustifyH("LEFT")
-
     -- Roster table: header row, then a scrolling list.
     local header = CreateFrame("Frame", nil, frame)
-    header:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -101)
-    header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -30, -101)
+    header:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -62)
+    header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -30, -62)
     header:SetHeight(18)
     local nameHeader = CreateHeader(header, "name", "Player", NAME_WIDTH, "LEFT")
     nameHeader:SetPoint("LEFT", 4, 0)
     local classHeader = CreateHeader(header, "class", "Class", CLASS_WIDTH, "LEFT")
-    classHeader:SetPoint("LEFT", nameHeader, "RIGHT", 4, 0)
+    classHeader:SetPoint("LEFT", nameHeader, "RIGHT", CLASS_OFFSET, 0)
     local rankHeader = CreateHeader(header, "rank", "Rank", RANK_WIDTH, "LEFT")
     rankHeader:SetPoint("LEFT", classHeader, "RIGHT", 4, 0)
     local modHeader = CreateHeader(header, "modifier", "Modifier", MOD_WIDTH + 20, "CENTER")

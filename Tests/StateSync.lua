@@ -119,13 +119,18 @@ local function client(name)
     function methods:HasFocus() return self.focused end
     function methods:SetFocus() self.focused = true end
     function methods:ClearFocus() self.focused = false end
-    function methods:CreateFontString() return frame() end
+    function methods:CreateFontString() local fontString = frame(); fontString.owner = self; return fontString end
     function methods:GetFontString() return self end
     function methods:SetDataProvider(data) self.data = data end
     function methods:SetTitle(title) self.title = title end
     function methods:SetNormalTexture(path) self.normalTexture = path end
     function methods:GetPushedTexture() return frame() end
-    function methods:SetPoint(point) self.point = point end
+    function methods:SetPoint(point, ...) self.point, self.pointArgs = point, { ... } end
+    function methods:CreateTexture() return frame() end
+    function methods:SetDesaturated(value) self.desaturated = value end
+    function methods:SetAlpha(value) self.alpha = value end
+    function methods:SetSize(width, height) self.width, self.height = width, height end
+    function methods:SetResizeBounds(minWidth) self.minWidth = minWidth end
     function methods:SetVerticalScroll(value) self.verticalScroll = value end
     env.CreateFrame = function(_, frameName) return frame(frameName) end
     env.UIParent, env.GameTooltip = frame(), frame()
@@ -183,6 +188,15 @@ local function client(name)
     return c
 end
 
+-- Sync feedback is chat-only: helpers to inspect what a client printed.
+local function last(c) return c.prints[#c.prints] or "" end
+local function printedSince(c, mark) return table.concat(c.prints, "\n", mark + 1) end
+local function count(c, text)
+    local total = 0
+    for _, line in ipairs(c.prints) do if line:find(text, 1, true) then total = total + 1 end end
+    return total
+end
+
 local p, f = client("Publisher-Realm"), client("Follower-Realm")
 assert(p.ns.SetModifier("Publisher-Realm", 12.5))
 assert(p.ns.SetModifier("Former-Realm", -4))
@@ -193,7 +207,13 @@ p.ns.SetModifier("Publisher-Realm", 22)
 assert(p.ns.db.backups[backup1]["Publisher-Realm"] == 12.5)
 assert(p.ns.RestoreBackup(backup1) and p.ns.GetPlayerModifier() == 12.5)
 assert(p.ns.SelectPublisher("Publisher"))
+assert(last(p):find(p.ns.L.LOCAL_PUBLISHER, 1, true))
+local printsBeforeEdit = #p.prints
+assert(p.ns.SetModifier("Publisher-Realm", 12.5) and #p.prints == printsBeforeEdit)
+assert(p.ns.GetSyncStatus == nil and p.ns.RefreshSyncControls == nil and p.ns.OnModifierStateChanged == nil)
 assert(f.ns.SelectPublisher("Publisher-Realm"))
+assert(last(f):find(string.format(f.ns.L.PUBLISHER_SET, "Publisher-Realm"), 1, true))
+for _, line in ipairs(f.prints) do assert(not line:find(f.ns.L.LOCAL_PUBLISHER, 1, true)) end
 assert(not f.ns.SetModifier("Follower-Realm", 99))
 f.ns.db.modifiers = { ["Old-Realm"] = 42 }
 assert(not f.ns.ImportModifiers('{"bad|name":7}'))
@@ -235,6 +255,7 @@ f.ns.ToggleDebugFrame()
 assert(f.frames.RolloverDebugFrame:IsShown())
 f.ns.ToggleDebugFrame()
 assert(not f.frames.RolloverDebugFrame:IsShown())
+local syncMark = #f.prints
 f.ns.db.modifiers = { ["Old-Realm"] = 42 }
 assert(f.ns.RequestSync())
 assert(not f.ns.ImportModifiers("{}") and not f.ns.SelectPublisher("Follower-Realm"))
@@ -245,7 +266,12 @@ advance(3.1)
 assert(f.ns.IsSyncPending() and f.ns.GetModifier("Old-Realm") == 0)
 assert(f.ns.GetModifier("Follower-Realm") == 0)
 advance(10)
-assert(not f.ns.IsSyncPending() and f.ns.db.sync.lastSync)
+assert(not f.ns.IsSyncPending())
+local syncOutput = printedSince(f, syncMark)
+assert(syncOutput:find("Requesting modifiers from Publisher-Realm", 1, true))
+assert(syncOutput:find("Receiving 5 modifiers from Publisher-Realm", 1, true))
+assert(syncOutput:find("Synced 5 modifiers from Publisher-Realm", 1, true))
+assert(not syncOutput:find("Sync failed", 1, true))
 assert(f.ns.GetModifier("Publisher-Realm") == 12.5 and f.ns.GetModifier("Former-Realm") == -4)
 assert(f.ns.db.modifiers["Zero-Realm"] == 0)
 assert(f.ns.db.backups[before]["Old-Realm"] == 42)
@@ -263,37 +289,39 @@ f.ns.OnSyncMessage("Rollover", "1\tBEGIN\t" .. requestId .. "\t2", "WHISPER", "P
 f.ns.OnSyncMessage("Rollover", "1\tVALUE\t" .. requestId .. "\t1\tPublisher-Realm\t-7", "WHISPER", "Publisher-Realm")
 assert(f.ns.GetModifier("Publisher-Realm") == -7)
 f.ns.OnSyncMessage("Rollover", "1\tEND\t" .. requestId .. "\t2", "WHISPER", "Publisher-Realm")
-assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Publisher-Realm") == -7 and not f.ns.db.sync.lastSync)
-assert(f.ns.GetSyncStatus():find("Partial changes remain", 1, true))
+assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Publisher-Realm") == -7)
+assert(last(f):find("Partial changes remain", 1, true))
 advance(35)
 
--- Lockdown defers without losing the pre-sync backup; send failure is explicit.
+-- Lockdown defers without losing the pre-sync backup (reported once, not on every retry).
 f.result = 11
 assert(f.ns.RequestSync())
 advance(2)
-assert(f.ns.IsSyncPending() and f.ns.GetSyncStatus() == f.ns.L.DEFERRED)
+assert(f.ns.IsSyncPending() and last(f):find(f.ns.L.DEFERRED, 1, true))
+advance(12)
+assert(f.ns.IsSyncPending() and count(f, f.ns.L.DEFERRED) == 1)
 f.result = 0
 advance(20)
-assert(not f.ns.IsSyncPending() and f.ns.db.sync.lastSync)
+assert(not f.ns.IsSyncPending() and last(f):find("Synced", 1, true))
 advance(35)
 f.result = 12
 assert(f.ns.RequestSync())
 advance(2)
-assert(not f.ns.IsSyncPending() and f.ns.GetSyncStatus():find("12", 1, true))
+assert(not f.ns.IsSyncPending() and last(f):find("12", 1, true))
 f.result = 0
 
 -- Cancel releases the UI immediately, and throttle retries the request.
 assert(f.ns.RequestSync())
 f.ns.CancelSync()
-assert(not f.ns.IsSyncPending() and f.ns.GetSyncStatus():find("cancelled", 1, true))
+assert(not f.ns.IsSyncPending() and last(f):find("cancelled", 1, true))
 advance(35)
 f.result = 3
 assert(f.ns.RequestSync())
 advance(2)
-assert(f.ns.IsSyncPending() and f.ns.GetSyncStatus() == f.ns.L.DEFERRED)
+assert(f.ns.IsSyncPending() and last(f):find(f.ns.L.DEFERRED, 1, true))
 f.result = 0
 advance(20)
-assert(not f.ns.IsSyncPending() and f.ns.db.sync.lastSync)
+assert(not f.ns.IsSyncPending() and last(f):find("Synced", 1, true))
 
 -- Losing the guild cancels an active receive; timeout leaves applied values.
 assert(f.ns.RequestSync())
@@ -305,12 +333,16 @@ advance(35)
 f.result = 11
 assert(f.ns.RequestSync())
 advance(1801)
-assert(not f.ns.IsSyncPending() and f.ns.GetSyncStatus():find("timed out", 1, true))
+assert(not f.ns.IsSyncPending() and last(f):find("timed out", 1, true))
 f.result = 0
 
 f.ns.ToggleMainFrame()
 local main = f.frames.RolloverMainFrame
 assert(main:IsShown() and f.rosterRequested)
+-- No status text anywhere in the window: the only font string owned by the frame is the empty-roster label.
+local mainFontStrings = 0
+for _, object in ipairs(f.frames) do if object.owner == main then mainFontStrings = mainFontStrings + 1 end end
+assert(mainFontStrings == 1 and main.syncStatus == nil)
 local row = f.env.CreateFrame("Frame")
 f.initRow(row, main.scrollBox.data[1])
 assert(not row.modEdit.enabled)
@@ -320,17 +352,76 @@ assert(row.modEdit.enabled)
 row.modEdit:SetText("-9")
 row.modEdit.scripts.OnEditFocusLost(row.modEdit)
 assert(f.ns.GetModifier(row.key) == -9)
-local tools, publisherEdit
+local tools
 for _, button in ipairs(f.frames) do
     if button.normalTexture and button.normalTexture:find("Gear", 1, true) then tools = button end
-    if button.point == "TOPLEFT" and button.scripts.OnEnterPressed then publisherEdit = button end
 end
 assert(tools and tools.point == "TOPRIGHT" and not tools.text)
-assert(publisherEdit)
 tools.scripts.OnEnter(tools)
 assert(f.env.GameTooltip.text == f.ns.L.TOOLS)
-tools.scripts.OnClick(tools)
-assert(#f.menu >= 6)
+
+-- The top input, Set and Sync controls are gone; publishing is chosen with the row crowns.
+for _, frame in ipairs(f.frames) do
+    assert(frame.text ~= "Set" and frame.text ~= "Sync" and not frame.scripts.OnEnterPressed
+        or frame == row.modEdit, "removed publisher control still exists")
+end
+
+-- Width fits the table: margins 14+30, columns 4+150+(2+16+2)+90+4+110+10+60.
+local requiredWidth = 14 + 4 + 150 + 20 + 90 + 4 + 110 + 10 + 60 + 30
+assert(main.width >= requiredWidth and main.minWidth >= requiredWidth)
+local classHeader
+for _, frame in ipairs(f.frames) do if frame.label == "Class" then classHeader = frame end end
+assert(classHeader.pointArgs[3] == 20 and row.classText.pointArgs[3] == 20)
+
+-- Crown buttons: bright for the current publisher, dim for others (no border/glow).
+local rowA, rowB = f.env.CreateFrame("Frame"), f.env.CreateFrame("Frame")
+f.initRow(rowA, main.scrollBox.data[1])
+f.initRow(rowB, main.scrollBox.data[2])
+assert(rowA.key == "Publisher-Realm" and rowB.key == "Follower-Realm")
+local crownA, crownB = rowA.publisherButton, rowB.publisherButton
+assert(crownA.icon.desaturated and crownA.icon.alpha < 1)
+assert(not crownB.icon.desaturated and crownB.icon.alpha == 1)
+assert(crownA.glow == nil and crownB.glow == nil)
+crownA.scripts.OnEnter(crownA)
+assert(f.env.GameTooltip.text == f.ns.L.SET_PUBLISHER)
+crownB.scripts.OnEnter(crownB)
+assert(f.env.GameTooltip.text == f.ns.L.CURRENT_PUBLISHER)
+crownA.scripts.OnClick()
+assert(f.ns.db.sync.publisher == "Publisher-Realm" and not f.ns.IsPublisher() and not f.ns.CanEditModifiers())
+f.initRow(rowA, main.scrollBox.data[1])
+f.initRow(rowB, main.scrollBox.data[2])
+assert(not crownA.icon.desaturated and crownA.icon.alpha == 1)
+assert(crownB.icon.desaturated and crownB.icon.alpha < 1)
+assert(not rowA.modEdit.enabled)
+crownA.scripts.OnClick()
+assert(f.ns.db.sync.publisher == "Publisher-Realm")
+
+-- Tools menu: sync lives here, switches to Cancel while receiving, and the crowns lock.
+local function menuEntries()
+    tools.scripts.OnClick(tools)
+    local labels = {}
+    for _, entry in ipairs(f.menu) do labels[entry.label] = entry end
+    return labels
+end
+local labels = menuEntries()
+for _, key in ipairs({ "SYNC_FROM_PUBLISHER", "BACKUP", "EXPORT", "IMPORT", "RESTORE" }) do
+    assert(labels[f.ns.L[key]], key)
+end
+assert(not labels[f.ns.L.CANCEL_SYNC])
+advance(35)
+labels[f.ns.L.SYNC_FROM_PUBLISHER].action()
+assert(f.ns.IsSyncPending())
+f.initRow(rowA, main.scrollBox.data[1])
+assert(not crownA.enabled)
+labels = menuEntries()
+assert(labels[f.ns.L.CANCEL_SYNC] and not labels[f.ns.L.SYNC_FROM_PUBLISHER])
+assert(labels[f.ns.L.IMPORT].enabled == false and labels[f.ns.L.RESTORE].enabled == false)
+labels[f.ns.L.CANCEL_SYNC].action()
+assert(not f.ns.IsSyncPending())
+f.initRow(rowA, main.scrollBox.data[1])
+assert(crownA.enabled)
+assert(menuEntries()[f.ns.L.SYNC_FROM_PUBLISHER])
+advance(35)
 f.load("Core\\Events.lua")
 local events = f.frames[#f.frames]
 events.scripts.OnEvent(events, "ADDON_LOADED", "Rollover")
@@ -342,7 +433,7 @@ advance(35)
 assert(f.ns.SelectPublisher("Third-Realm"))
 assert(f.ns.RequestSync())
 advance(5)
-assert(not f.ns.IsSyncPending() and f.ns.GetSyncStatus():find("not publishing", 1, true))
+assert(not f.ns.IsSyncPending() and last(f):find("not publishing", 1, true))
 noAPI.env.C_EncodingUtil = nil
 assert(not noAPI.ns.ImportModifiers("{}"))
 noAPI.ns.ExportModifiers()
@@ -377,7 +468,7 @@ for _, line in ipairs(rp.prints) do assert(not line:find("unambiguous", 1, true)
 assert(rf.ns.SelectPublisher("Andriod En"))
 assert(rf.ns.RequestSync())
 advance(20)
-assert(not rf.ns.IsSyncPending() and rf.ns.db.sync.lastSync)
+assert(not rf.ns.IsSyncPending() and last(rf):find("Synced 3 modifiers from Andriod En", 1, true))
 assert(rf.ns.GetModifier("Andriod En") == 220 and rf.ns.GetModifier("Other Player") == -3)
 assert(rf.ns.db.modifiers["Third Guy"] == 0 and rf.ns.GetPlayerModifier() == -3)
 assert(rf.ns.ImportModifiers('{"Andriod En":220}') and rf.ns.GetModifier("Other Player") == 0)

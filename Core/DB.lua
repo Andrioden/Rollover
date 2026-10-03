@@ -6,7 +6,7 @@ local defaults = {
     version = DB_VERSION,
     modifiers = {}, -- [guild roster name] = number
     backups = {}, -- [date-time] = copy of modifiers
-    sync = {}, -- { publisher = guild roster name, lastSync = timestamp }
+    sync = {}, -- { publisher = guild roster name }
 }
 
 function ns.InitDB()
@@ -72,7 +72,6 @@ function ns.SetModifier(name, value)
     if not ns.IsValidMemberName(name) then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
     if not ns.IsValidModifier(value) then ns.Print(ns.L.INVALID_MODIFIER); return false end
     ns.db.modifiers[name] = value
-    ns.OnModifierStateChanged()
     return true
 end
 
@@ -109,7 +108,6 @@ function ns.RestoreBackup(key)
     if not valid then ns.Print(message); return false end
     ns.SaveBackup()
     ns.db.modifiers = CopyTable(backup)
-    ns.OnModifierStateChanged()
     ns.RefreshRoster()
     ns.Print(string.format(ns.L.BACKUP_RESTORED, key))
     return true
@@ -149,7 +147,6 @@ function ns.ImportModifiers(text)
     if not valid then ns.Print(message); return false end
     ns.SaveBackup()
     ns.db.modifiers = state
-    ns.OnModifierStateChanged()
     ns.RefreshRoster()
     ns.Print(ns.L.IMPORTED)
     return true

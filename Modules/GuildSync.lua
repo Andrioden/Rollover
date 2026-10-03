@@ -3,7 +3,7 @@ local addonName, ns = ...
 local PREFIX, PROTOCOL = "Rollover", "1"
 local TIMEOUT, MAX_MEMBERS = 1800, 1000
 local queue, recentRequests = {}, {}
-local pending, timer, ready, status
+local pending, timer, ready
 local sequence = 0
 
 local function GuildKey()
@@ -15,15 +15,9 @@ local function GuildKey()
     return realm .. ":" .. guild
 end
 
-local function Notify(message, failure)
-    status = failure and string.format(ns.L.SYNC_FAILED, message) or message
-    if failure then ns.Print(status) end
-    ns.RefreshSyncControls()
-end
-
 local function Fail(message)
     pending = nil
-    Notify(message, true)
+    ns.Print(string.format(ns.L.SYNC_FAILED, message))
     ns.RefreshRoster()
 end
 
@@ -71,12 +65,14 @@ Pump = function()
         local results = Enum.SendAddonMessageResult
         if result == results.Success then
             task.index = task.index + 1
-            if task.request and pending == task.request then
-                Notify(string.format(ns.L.REQUESTING, task.target))
-            end
+            task.deferred = nil
             if task.index > #task.messages then table.remove(queue, 1) end
         elseif result == results.AddOnMessageLockdown or result == results.AddonMessageThrottle then
-            Notify(ns.L.DEFERRED)
+            -- Retried every 5 seconds; tell the player once per deferral.
+            if not task.deferred then
+                task.deferred = true
+                ns.Print(ns.L.DEFERRED)
+            end
             Schedule(5)
             return
         else
@@ -96,30 +92,19 @@ function ns.CancelSync()
     if pending then Fail(ns.L.SYNC_CANCELLED) end
 end
 
-function ns.GetSyncStatus()
-    if not ready then return ns.L.PREFIX_FAILED end
-    if status then return status end
-    if ns.IsPublisher() then return ns.L.LOCAL_PUBLISHER end
-    if ns.db.sync.lastSync and ns.db.sync.publisher then
-        return string.format(ns.L.SYNCED, ns.db.sync.publisher,
-            date("%Y-%m-%d %H:%M:%S", ns.db.sync.lastSync))
-    end
-    return ns.L.NEVER_SYNCED
-end
-
-function ns.SelectPublisher(input)
+function ns.SelectPublisher(name)
     if pending then ns.Print(ns.L.BUSY); return false end
-    local name = ns.ResolveGuildMember(strtrim(input or ""))
+    name = ns.ResolveGuildMember(name)
     if not name then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
-    ns.db.sync.publisher, ns.db.sync.lastSync = name, nil
-    Notify(ns.IsPublisher() and ns.L.LOCAL_PUBLISHER or ns.L.SOURCE_CHANGED)
+    if name == ns.db.sync.publisher then return true end
+    ns.db.sync.publisher = name
+    if ns.IsPublisher() then
+        ns.Print(ns.L.LOCAL_PUBLISHER)
+    else
+        ns.Print(string.format(ns.L.PUBLISHER_SET, name))
+    end
     ns.RefreshRoster()
     return true
-end
-
-function ns.OnModifierStateChanged()
-    ns.db.sync.lastSync = nil
-    Notify(ns.L.STATE_CHANGED)
 end
 
 function ns.RequestSync()
@@ -133,7 +118,6 @@ function ns.RequestSync()
     if not ns.ResolveGuildMember(source) then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
     if #queue >= 3 then ns.Print(ns.L.BUSY); return false end
     ns.SaveBackup()
-    ns.db.sync.lastSync = nil
     sequence = sequence + 1
     local transfer = {
         id = string.format("%d-%d", GetServerTime(), sequence),
@@ -141,7 +125,7 @@ function ns.RequestSync()
     }
     pending = transfer
     Enqueue({ target = source, request = transfer, messages = { Message("REQUEST", transfer.id) } })
-    Notify(string.format(ns.L.REQUESTING, source))
+    ns.Print(string.format(ns.L.REQUESTING, source))
     ns.RefreshRoster()
     C_Timer.After(TIMEOUT, function()
         if pending == transfer then Fail(ns.L.TIMEOUT) end
@@ -186,7 +170,6 @@ function ns.OnSyncContextChanged()
         or not ns.ResolveGuildMember(pending.sender) or ns.db.sync.publisher ~= pending.sender) then
         Fail(ns.L.NO_GUILD)
     end
-    ns.RefreshSyncControls()
 end
 
 function ns.OnSyncMessage(prefix, text, channel, sender)
@@ -214,6 +197,7 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         if not count or pending.count then Fail(ns.L.INVALID_TRANSFER); return end
         pending.count = count
         ns.db.modifiers = {}
+        ns.Print(string.format(ns.L.RECEIVING, count, member))
         ns.RefreshRoster()
     elseif fields[2] == "VALUE" then
         local index = #fields == 6 and Integer(fields[4], MAX_MEMBERS)
@@ -227,7 +211,6 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         pending.received = index
         ns.db.modifiers[name] = value
         ns.RefreshRoster()
-        Notify(string.format(ns.L.SYNCING, member, index, pending.count))
     elseif fields[2] == "END" then
         local count = #fields == 4 and Integer(fields[4], MAX_MEMBERS)
         if not pending.count or count ~= pending.count or pending.received ~= count then
@@ -235,9 +218,7 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
             return
         end
         pending = nil
-        ns.db.sync.lastSync = GetServerTime()
-        status = nil
-        Notify(ns.GetSyncStatus())
+        ns.Print(string.format(ns.L.SYNCED, count, member))
         ns.RefreshRoster()
     elseif fields[2] == "ERROR" then
         local errors = { NOT_PUBLISHER = ns.L.NOT_PUBLISHER, BUSY = ns.L.BUSY, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
