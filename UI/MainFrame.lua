@@ -17,12 +17,13 @@ local headers = {}
 
 local function InitRow(row, data)
     if not row.nameText then
+        -- Player name column.
         row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.nameText:SetPoint("LEFT", 4, 0)
         row.nameText:SetWidth(NAME_WIDTH)
         row.nameText:SetJustifyH("LEFT")
 
-        -- Crown toggle: bright for the current publisher, dim for everyone else.
+        -- Publisher selection column.
         local publisher = CreateFrame("Button", nil, row)
         publisher:SetSize(PUBLISHER_SIZE, PUBLISHER_SIZE)
         publisher:SetPoint("LEFT", row.nameText, "RIGHT", PUBLISHER_GAP, 0)
@@ -39,16 +40,19 @@ local function InitRow(row, data)
         publisher:SetScript("OnLeave", GameTooltip_Hide)
         row.publisherButton = publisher
 
+        -- Class column.
         row.classText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.classText:SetPoint("LEFT", row.nameText, "RIGHT", CLASS_OFFSET, 0)
         row.classText:SetWidth(CLASS_WIDTH)
         row.classText:SetJustifyH("LEFT")
 
+        -- Rank column.
         row.rankText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.rankText:SetPoint("LEFT", row.classText, "RIGHT", 4, 0)
         row.rankText:SetWidth(RANK_WIDTH)
         row.rankText:SetJustifyH("LEFT")
 
+        -- Modifier column.
         local edit = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
         edit:SetSize(MOD_WIDTH, 18)
         edit:SetPoint("LEFT", row.rankText, "RIGHT", 10, 0)
