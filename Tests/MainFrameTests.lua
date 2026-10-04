@@ -64,7 +64,7 @@ test("window width fits the table columns", function()
     assert(main.width >= requiredWidth and main.minWidth >= requiredWidth)
     local playerHeader, classHeader
     for _, frame in ipairs(f.frames) do
-        if frame.label == "Player" then playerHeader = frame end
+        if frame.label == "Name" then playerHeader = frame end
         if frame.label == "Class" then classHeader = frame end
     end
     assert(playerHeader.pointArgs[1] == 22)
