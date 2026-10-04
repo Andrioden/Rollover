@@ -207,7 +207,7 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 - Simulate restrictions: CVars `addonChatRestrictionsForced`, `addonCombatRestrictionsForced`, `addonMapRestrictionsForced`, `addonEncounterRestrictionsForced`, `addonPvPMatchRestrictionsForced`, `addonChallengeModeRestrictionsForced` (set to 1; not persisted across restarts).
 - Editor setup: VS Code + **Lua** extension (sumneko) for IntelliSense; the **WoW API** extension (Ketho) adds WoW API definitions. Reference Blizzard code: `wow-ui-source` (`forever` branch) and [Ketho/BlizzardInterfaceResources](https://github.com/Ketho/BlizzardInterfaceResources).
 - Testing multi-player features (comms, guild sync) needs at least two clients/accounts; use `"WHISPER"` to yourself to smoke-test comm code.
-- Regression tests: `Tests\StateSync.lua` runs outside the game against mocked WoW APIs (two clients, timers, message delivery): `lua .\Tests\StateSync.lua .` from the addon folder, or `npm exec --yes --package=fengari-node-cli -- fengari .\Tests\StateSync.lua .` without a Lua install. Mocks do not prove real client behavior (JSON parsing, menu layout, whisper sender format); verify those in game.
+- Regression tests: `Tests\StateSync.lua` runs sectioned scenarios outside the game using the shared WoW API/client mock in `Tests\MockClient.lua` (timers, frames and message delivery): `lua .\Tests\StateSync.lua .` from the addon folder, or `npm exec --yes --package=fengari-node-cli -- fengari .\Tests\StateSync.lua .` without a Lua install. Test roster fixtures use plain character names, matching Forever roster data. Mocks do not prove real client behavior (JSON parsing, menu layout, whisper sender format); verify those in game.
 - Do not commit `WTF/` data or screenshots; the repo is only this addon folder.
 
 ## 6. Coding conventions for this repo
@@ -243,7 +243,8 @@ UI\ImportFrame.lua      -- paste-JSON window with Import button (ns.ShowImportFr
 UI\RollFrame.lua        -- roll-for-item popup (ns.ShowRollFrame(link)); Core\DB.lua has ns.GetPlayerModifier
 Core\Commands.lua       -- /rollover slash command dispatch
 Core\Events.lua         -- ADDON_LOADED (ns.InitDB, ns.InitGuildSync, event registration), CHAT_MSG_ADDON, guild roster/guild changes -> sync context check + visible roster refresh
-Tests\StateSync.lua     -- standalone mocked two-client Lua regression harness (not loaded by TOC)
+Tests\MockClient.lua    -- shared mocked WoW client/API wiring for standalone tests (not loaded by TOC)
+Tests\StateSync.lua     -- sectioned state-sync, UI, import/export and event regression scenarios
 Modules\Reserves.lua    -- planned: reserve data model + rules
 Modules\Modifiers.lua   -- planned: modifier rules and calculations for rolls
 Modules\Rolls.lua       -- planned: roll detection/parsing/ranking, announcements
