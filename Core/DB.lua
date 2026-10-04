@@ -10,7 +10,7 @@ local defaults = {
     version = DB_VERSION,
     modifiers = {}, -- [guild roster name] = number
     backups = {}, -- [date-time] = copy of modifiers
-    sync = {}, -- { publisher = guild roster name, updatedAt = publisher server time of the last change }
+    sync = {}, -- { master = guild roster name, updatedAt = master server time of the last change }
 }
 
 function ns.InitDB()
@@ -73,16 +73,16 @@ function ns.IsGuildMemberOnline(name)
     end
 end
 
-function ns.IsPublisher()
+function ns.IsMaster()
     local player = ns.ResolveGuildMember(ns.GetPlayerName())
-    return player ~= nil and ns.db.sync.publisher == player
+    return player ~= nil and ns.db.sync.master == player
 end
 
 function ns.CanEditModifiers()
-    return (not ns.db.sync.publisher or ns.IsPublisher()) and not ns.IsSyncPending()
+    return (not ns.db.sync.master or ns.IsMaster()) and not ns.IsSyncPending()
 end
 
--- Followers compare this value with the publisher's, never with their own clock. It always increases.
+-- Followers compare this value with the master's, never with their own clock. It always increases.
 function ns.TouchModifiers()
     ns.db.sync.updatedAt = math.max(GetServerTime(), (ns.db.sync.updatedAt or 0) + 1)
 end
@@ -121,10 +121,10 @@ function ns.SaveBackup(auto)
     return key
 end
 
--- Followers must not diverge from their publisher; select yourself as publisher to edit locally.
+-- Followers must not diverge from their master; select yourself as master to edit locally.
 function ns.CanReplaceModifiers()
     if ns.IsSyncPending() then ns.Print(ns.L.BUSY); return false end
-    if ns.db.sync.publisher and not ns.IsPublisher() then ns.Print(ns.L.FOLLOWER_LOCKED); return false end
+    if ns.db.sync.master and not ns.IsMaster() then ns.Print(ns.L.FOLLOWER_LOCKED); return false end
     return true
 end
 

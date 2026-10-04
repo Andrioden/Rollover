@@ -1,13 +1,13 @@
 -- Run with a standalone Lua interpreter: lua Tests\MainFrameTests.lua <addon directory>
--- Covers UI\MainFrame.lua: roster rows, permissions, publisher crowns and the Tools menu.
+-- Covers UI\MainFrame.lua: roster rows, permissions, master crowns and the Tools menu.
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
 local harness = require("Tests.MockClient").new(root)
 local advance, client = harness.advance, harness.client
 local test = harness.suite("UI\\MainFrame.lua")
 
-local p, f = client("Publisher"), client("Follower")
-assert(p.ns.SelectPublisher("Publisher") and f.ns.SelectPublisher("Publisher"))
+local p, f = client("Master"), client("Follower")
+assert(p.ns.SelectMaster("Master") and f.ns.SelectMaster("Master"))
 local main, row, tools, rowA, rowB, crownA, crownB, labels
 
 local function menuEntries()
@@ -30,11 +30,11 @@ test("window has no status text", function()
     assert(fontStrings == 1 and main.syncStatus == nil)
 end)
 
-test("rows are read-only for followers and editable for the publisher", function()
+test("rows are read-only for followers and editable for the master", function()
     row = f.env.CreateFrame("Frame")
     f.initRow(row, main.scrollBox.data[1])
     assert(not row.modEdit.enabled)
-    assert(f.ns.SelectPublisher("Follower"))
+    assert(f.ns.SelectMaster("Follower"))
     f.initRow(row, main.scrollBox.data[1])
     assert(row.modEdit.enabled)
     row.modEdit:SetText("-9")
@@ -54,7 +54,7 @@ end)
 test("legacy top input, Set and Sync controls are gone", function()
     for _, frame in ipairs(f.frames) do
         assert(frame.text ~= "Set" and frame.text ~= "Sync" and not frame.scripts.OnEnterPressed
-            or frame == row.modEdit, "removed publisher control still exists")
+            or frame == row.modEdit, "removed master control still exists")
     end
 end)
 
@@ -71,12 +71,12 @@ test("window width fits the table columns", function()
     assert(classHeader.pointArgs[3] == 2 and row.classText.pointArgs[3] == 2)
 end)
 
-test("crowns are bright for the publisher and dim for others", function()
+test("crowns are bright for the master and dim for others", function()
     rowA, rowB = f.env.CreateFrame("Frame"), f.env.CreateFrame("Frame")
     f.initRow(rowA, main.scrollBox.data[1])
     f.initRow(rowB, main.scrollBox.data[2])
-    assert(rowA.key == "Publisher" and rowB.key == "Follower")
-    crownA, crownB = rowA.publisherButton, rowB.publisherButton
+    assert(rowA.key == "Master" and rowB.key == "Follower")
+    crownA, crownB = rowA.masterButton, rowB.masterButton
     assert(crownA.pointArgs[1] == rowA and crownA.pointArgs[2] == "LEFT" and crownA.pointArgs[3] == 4)
     assert(rowA.nameText.pointArgs[1] == crownA and rowA.nameText.pointArgs[2] == "RIGHT")
     assert(crownA.icon.desaturated and crownA.icon.alpha < 1)
@@ -86,49 +86,49 @@ end)
 
 test("crown tooltips describe the action", function()
     crownA.scripts.OnEnter(crownA)
-    assert(f.env.GameTooltip.text == f.ns.L.SET_PUBLISHER)
+    assert(f.env.GameTooltip.text == f.ns.L.SET_MASTER)
     crownB.scripts.OnEnter(crownB)
-    assert(f.env.GameTooltip.text == f.ns.L.CURRENT_PUBLISHER)
+    assert(f.env.GameTooltip.text == f.ns.L.CURRENT_MASTER)
 end)
 
-test("clicking a crown selects that publisher and locks local edits", function()
+test("clicking a crown selects that master and locks local edits", function()
     crownA.scripts.OnClick()
-    assert(f.ns.db.sync.publisher == "Publisher" and not f.ns.IsPublisher() and not f.ns.CanEditModifiers())
+    assert(f.ns.db.sync.master == "Master" and not f.ns.IsMaster() and not f.ns.CanEditModifiers())
     f.initRow(rowA, main.scrollBox.data[1])
     f.initRow(rowB, main.scrollBox.data[2])
     assert(not crownA.icon.desaturated and crownA.icon.alpha == 1)
     assert(crownB.icon.desaturated and crownB.icon.alpha < 1)
     assert(not rowA.modEdit.enabled)
     crownA.scripts.OnClick()
-    assert(f.ns.db.sync.publisher == "Publisher")
+    assert(f.ns.db.sync.master == "Master")
 end)
 
-test("Tools menu lists sync, self-publisher, backup, export, import and restore", function()
+test("Tools menu lists sync, self-master, backup, export, import and restore", function()
     labels = menuEntries()
-    for _, key in ipairs({ "SYNC_FROM_PUBLISHER", "SET_PUBLISHER", "BACKUP", "EXPORT", "IMPORT", "RESTORE" }) do
+    for _, key in ipairs({ "SYNC_FROM_MASTER", "SET_MASTER", "BACKUP", "EXPORT", "IMPORT", "RESTORE" }) do
         assert(labels[f.ns.L[key]], key)
     end
-    local syncIndex, publisherIndex
+    local syncIndex, masterIndex
     for index, entry in ipairs(f.menu) do
-        if entry.label == f.ns.L.SYNC_FROM_PUBLISHER then syncIndex = index end
-        if entry.label == f.ns.L.SET_PUBLISHER then publisherIndex = index end
+        if entry.label == f.ns.L.SYNC_FROM_MASTER then syncIndex = index end
+        if entry.label == f.ns.L.SET_MASTER then masterIndex = index end
     end
-    assert(publisherIndex == syncIndex + 1, "Set as publisher should follow Sync from publisher")
-    labels[f.ns.L.SET_PUBLISHER].action()
-    assert(f.ns.db.sync.publisher == "Follower" and f.ns.IsPublisher())
-    assert(f.ns.SelectPublisher("Publisher"))
+    assert(masterIndex == syncIndex + 1, "Set as master should follow Sync from master")
+    labels[f.ns.L.SET_MASTER].action()
+    assert(f.ns.db.sync.master == "Follower" and f.ns.IsMaster())
+    assert(f.ns.SelectMaster("Master"))
     assert(not labels[f.ns.L.CANCEL_SYNC])
 end)
 
 test("Tools sync becomes Cancel while receiving and locks the crowns", function()
     advance(35)
-    labels[f.ns.L.SYNC_FROM_PUBLISHER].action()
+    labels[f.ns.L.SYNC_FROM_MASTER].action()
     assert(f.ns.IsSyncPending())
     f.initRow(rowA, main.scrollBox.data[1])
     assert(not crownA.enabled)
     labels = menuEntries()
-    assert(labels[f.ns.L.CANCEL_SYNC] and not labels[f.ns.L.SYNC_FROM_PUBLISHER])
-    assert(labels[f.ns.L.SET_PUBLISHER].enabled == false)
+    assert(labels[f.ns.L.CANCEL_SYNC] and not labels[f.ns.L.SYNC_FROM_MASTER])
+    assert(labels[f.ns.L.SET_MASTER].enabled == false)
     assert(labels[f.ns.L.IMPORT].enabled == false and labels[f.ns.L.RESTORE].enabled == false)
 end)
 
@@ -137,14 +137,14 @@ test("Cancel restores the Tools sync entry and unlocks the crowns", function()
     assert(not f.ns.IsSyncPending())
     f.initRow(rowA, main.scrollBox.data[1])
     assert(crownA.enabled)
-    assert(menuEntries()[f.ns.L.SYNC_FROM_PUBLISHER])
+    assert(menuEntries()[f.ns.L.SYNC_FROM_MASTER])
     advance(35)
 end)
 
 test("realm-less 'First Last' names can be edited in the roster", function()
     local rp = client("Andriod En")
     rp.roster = { "Andriod En", "Other Player", "Third Guy" }
-    assert(rp.ns.SelectPublisher("Andriod En") and rp.ns.IsPublisher())
+    assert(rp.ns.SelectMaster("Andriod En") and rp.ns.IsMaster())
     rp.ns.ToggleMainFrame()
     local realmlessRow = rp.env.CreateFrame("Frame")
     rp.initRow(realmlessRow, rp.frames.RolloverMainFrame.scrollBox.data[1])

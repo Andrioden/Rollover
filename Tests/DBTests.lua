@@ -1,63 +1,63 @@
 -- Run with a standalone Lua interpreter: lua Tests\DBTests.lua <addon directory>
--- Covers Core\DB.lua: modifiers, backups, publisher selection, edit permissions and guild-member names.
+-- Covers Core\DB.lua: modifiers, backups, master selection, edit permissions and guild-member names.
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
 local harness = require("Tests.MockClient").new(root)
 local client, last = harness.client, harness.last
 local test = harness.suite("Core\\DB.lua")
 
-local p, f = client("Publisher"), client("Follower")
+local p, f = client("Master"), client("Follower")
 
 test("modifiers reject non-finite values", function()
-    assert(p.ns.SetModifier("Publisher", 12.5))
+    assert(p.ns.SetModifier("Master", 12.5))
     assert(p.ns.SetModifier("FormerMember", -4))
-    assert(not p.ns.SetModifier("Publisher", math.huge))
-    assert(p.ns.GetModifier("Publisher") == 12.5)
+    assert(not p.ns.SetModifier("Master", math.huge))
+    assert(p.ns.GetModifier("Master") == 12.5)
 end)
 
 test("backups are independent copies and restorable", function()
     local backup1, backup2 = p.ns.SaveBackup(), p.ns.SaveBackup()
     assert(backup1 ~= backup2)
-    p.ns.SetModifier("Publisher", 22)
-    assert(p.ns.db.backups[backup1].Publisher == 12.5)
+    p.ns.SetModifier("Master", 22)
+    assert(p.ns.db.backups[backup1].Master == 12.5)
     assert(p.ns.RestoreBackup(backup1) and p.ns.GetPlayerModifier() == 12.5)
 end)
 
-test("publisher can edit locally without announcing", function()
-    assert(p.ns.SelectPublisher("Publisher"))
-    assert(last(p):find(p.ns.L.LOCAL_PUBLISHER, 1, true))
+test("master can edit locally without announcing", function()
+    assert(p.ns.SelectMaster("Master"))
+    assert(last(p):find(p.ns.L.LOCAL_MASTER, 1, true))
     local printsBeforeEdit = #p.prints
-    assert(p.ns.SetModifier("Publisher", 12.5) and #p.prints == printsBeforeEdit)
+    assert(p.ns.SetModifier("Master", 12.5) and #p.prints == printsBeforeEdit)
     assert(p.ns.GetSyncStatus == nil and p.ns.RefreshSyncControls == nil and p.ns.OnModifierStateChanged == nil)
 end)
 
 test("follower cannot edit modifiers", function()
-    assert(f.ns.SelectPublisher("Publisher"))
-    assert(last(f):find(string.format(f.ns.L.PUBLISHER_OFFLINE, "Publisher"), 1, true))
-    for _, line in ipairs(f.prints) do assert(not line:find(f.ns.L.LOCAL_PUBLISHER, 1, true)) end
+    assert(f.ns.SelectMaster("Master"))
+    assert(last(f):find(string.format(f.ns.L.MASTER_OFFLINE, "Master"), 1, true))
+    for _, line in ipairs(f.prints) do assert(not line:find(f.ns.L.LOCAL_MASTER, 1, true)) end
     assert(not f.ns.SetModifier("Follower", 99))
 end)
 
 test("every change bumps updatedAt upward; unchanged edits do not", function()
     local stamp = p.ns.db.sync.updatedAt
     assert(stamp)
-    assert(p.ns.SetModifier("Publisher", 12.5) and p.ns.db.sync.updatedAt == stamp)
-    assert(p.ns.SetModifier("Publisher", 13) and p.ns.db.sync.updatedAt > stamp)
+    assert(p.ns.SetModifier("Master", 12.5) and p.ns.db.sync.updatedAt == stamp)
+    assert(p.ns.SetModifier("Master", 13) and p.ns.db.sync.updatedAt > stamp)
     stamp = p.ns.db.sync.updatedAt
-    assert(p.ns.SetModifier("Publisher", 14) and p.ns.db.sync.updatedAt > stamp) -- same server second
+    assert(p.ns.SetModifier("Master", 14) and p.ns.db.sync.updatedAt > stamp) -- same server second
     stamp = p.ns.db.sync.updatedAt
     assert(p.ns.RestoreBackup(p.ns.SaveBackup()) and p.ns.db.sync.updatedAt > stamp)
     stamp = p.ns.db.sync.updatedAt
-    assert(p.ns.ImportModifiers('{"Publisher":7,"ZeroMember":0}') and p.ns.db.sync.updatedAt > stamp)
+    assert(p.ns.ImportModifiers('{"Master":7,"ZeroMember":0}') and p.ns.db.sync.updatedAt > stamp)
 end)
 
-test("becoming publisher starts a timestamp and clears it for a new source", function()
+test("becoming master starts a timestamp and clears it for a new source", function()
     local own = client("Solo")
-    own.roster = { "Solo", "Publisher" }
+    own.roster = { "Solo", "Master" }
     assert(own.ns.db.sync.updatedAt == nil)
-    assert(own.ns.SelectPublisher("Solo") and own.ns.db.sync.updatedAt)
+    assert(own.ns.SelectMaster("Solo") and own.ns.db.sync.updatedAt)
     own.ns.db.sync.updatedAt = 42
-    assert(own.ns.SelectPublisher("Publisher") and own.ns.db.sync.updatedAt == nil)
+    assert(own.ns.SelectMaster("Master") and own.ns.db.sync.updatedAt == nil)
 end)
 
 test("followers cannot import or restore", function()

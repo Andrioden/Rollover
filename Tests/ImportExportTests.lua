@@ -13,22 +13,22 @@ test("import rejects invalid JSON and keeps current data", function()
     f.ns.db.modifiers = { OldMember = 42 }
     assert(not f.ns.ImportModifiers('{"bad|name":7}'))
     assert(not f.ns.ImportModifiers('{"":7}'))
-    assert(not f.ns.ImportModifiers('{"Publisher":"bad"}'))
+    assert(not f.ns.ImportModifiers('{"Master":"bad"}'))
     assert(not f.ns.ImportModifiers("{bad}"))
     assert(not f.ns.ImportModifiers("[]"))
     assert(not f.ns.ImportModifiers(string.rep(" ", 200001)))
     assert(f.ns.GetModifier("OldMember") == 42)
 end)
 
-test("import replaces the modifier table (no publisher selected)", function()
-    assert(f.ns.ImportModifiers('{"Publisher":7,"ZeroMember":0}'))
-    assert(f.ns.GetModifier("Publisher") == 7 and f.ns.GetModifier("OldMember") == 0)
+test("import replaces the modifier table (no master selected)", function()
+    assert(f.ns.ImportModifiers('{"Master":7,"ZeroMember":0}'))
+    assert(f.ns.GetModifier("Master") == 7 and f.ns.GetModifier("OldMember") == 0)
 end)
 
 test("export window shows the JSON and is copy-only", function()
     f.ns.ExportModifiers()
     exportFrame = f.frames.RolloverExportFrame
-    local exported = '{"Publisher":7,"ZeroMember":0}'
+    local exported = '{"Master":7,"ZeroMember":0}'
     assert(exportFrame:IsShown() and exportFrame.title == f.ns.L.EXPORT_TITLE)
     assert(exportFrame.edit:GetText() == exported and exportFrame.edit.focused)
     exportFrame.edit:SetText("tampered")
@@ -56,7 +56,7 @@ test("import window keeps invalid text open and closes after success", function(
         if button.text == f.ns.L.IMPORT_BUTTON then importButton = button end
     end
     importButton.scripts.OnClick()
-    assert(importFrame:IsShown() and f.ns.GetModifier("Publisher") == 7)
+    assert(importFrame:IsShown() and f.ns.GetModifier("Master") == 7)
     importFrame.edit:SetText("{}")
     importButton.scripts.OnClick()
     assert(next(f.ns.db.modifiers) == nil and not importFrame:IsShown())

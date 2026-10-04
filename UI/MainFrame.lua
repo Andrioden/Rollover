@@ -3,8 +3,8 @@ local addonName, ns = ...
 local frame
 
 local NAME_WIDTH, CLASS_WIDTH, RANK_WIDTH, MOD_WIDTH = 170, 90, 110, 60
-local PUBLISHER_SIZE, PUBLISHER_GAP = 16, 2
-local CLASS_OFFSET = PUBLISHER_GAP
+local MASTER_SIZE, MASTER_GAP = 16, 2
+local CLASS_OFFSET = MASTER_GAP
 local ROW_HEIGHT = 22
 -- Row content is 468 wide (+44 for margins and scrollbar); the defaults keep a little slack.
 local FRAME_WIDTH, FRAME_HEIGHT = 520, 400
@@ -16,26 +16,26 @@ local headers = {}
 
 local function InitRow(row, data)
     if not row.nameText then
-        -- Publisher selection column.
-        local publisher = CreateFrame("Button", nil, row)
-        publisher:SetSize(PUBLISHER_SIZE, PUBLISHER_SIZE)
-        publisher:SetPoint("LEFT", row, "LEFT", 4, 0)
-        publisher.icon = publisher:CreateTexture(nil, "ARTWORK")
-        publisher.icon:SetAllPoints()
-        publisher.icon:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
-        publisher:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-        publisher:SetScript("OnClick", function() ns.SelectPublisher(row.key) end)
-        publisher:SetScript("OnEnter", function(self)
+        -- Master selection column.
+        local master = CreateFrame("Button", nil, row)
+        master:SetSize(MASTER_SIZE, MASTER_SIZE)
+        master:SetPoint("LEFT", row, "LEFT", 4, 0)
+        master.icon = master:CreateTexture(nil, "ARTWORK")
+        master.icon:SetAllPoints()
+        master.icon:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
+        master:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+        master:SetScript("OnClick", function() ns.SelectMaster(row.key) end)
+        master:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText(row.isPublisher and ns.L.CURRENT_PUBLISHER or ns.L.SET_PUBLISHER)
+            GameTooltip:SetText(row.isMaster and ns.L.CURRENT_MASTER or ns.L.SET_MASTER)
             GameTooltip:Show()
         end)
-        publisher:SetScript("OnLeave", GameTooltip_Hide)
-        row.publisherButton = publisher
+        master:SetScript("OnLeave", GameTooltip_Hide)
+        row.masterButton = master
 
         -- Player name column.
         row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        row.nameText:SetPoint("LEFT", publisher, "RIGHT", PUBLISHER_GAP, 0)
+        row.nameText:SetPoint("LEFT", master, "RIGHT", MASTER_GAP, 0)
         row.nameText:SetWidth(NAME_WIDTH)
         row.nameText:SetJustifyH("LEFT")
 
@@ -79,10 +79,10 @@ local function InitRow(row, data)
     local shortName = Ambiguate(data.name, "short")
 
     row.key = data.name
-    row.isPublisher = ns.db.sync.publisher == data.name
-    row.publisherButton.icon:SetDesaturated(not row.isPublisher)
-    row.publisherButton.icon:SetAlpha(row.isPublisher and 1 or 0.35)
-    row.publisherButton:SetEnabled(not ns.IsSyncPending())
+    row.isMaster = ns.db.sync.master == data.name
+    row.masterButton.icon:SetDesaturated(not row.isMaster)
+    row.masterButton.icon:SetAlpha(row.isMaster and 1 or 0.35)
+    row.masterButton:SetEnabled(not ns.IsSyncPending())
     row.nameText:SetText(color and color:WrapTextInColorCode(shortName) or shortName)
     row.classText:SetText(member.class and LOCALIZED_CLASS_NAMES_MALE[member.class] or "")
     row.rankText:SetText(member.rank or "")
@@ -119,12 +119,12 @@ local function ShowTools(button)
         if ns.IsSyncPending() then
             root:CreateButton(ns.L.CANCEL_SYNC, ns.CancelSync)
         else
-            root:CreateButton(ns.L.SYNC_FROM_PUBLISHER, ns.RequestSync)
+            root:CreateButton(ns.L.SYNC_FROM_MASTER, ns.RequestSync)
         end
-        local setPublisher = root:CreateButton(ns.L.SET_PUBLISHER, function()
-            ns.SelectPublisher(ns.GetPlayerName())
+        local setMaster = root:CreateButton(ns.L.SET_MASTER, function()
+            ns.SelectMaster(ns.GetPlayerName())
         end)
-        setPublisher:SetEnabled(not ns.IsSyncPending())
+        setMaster:SetEnabled(not ns.IsSyncPending())
         root:CreateDivider()
         root:CreateButton(ns.L.BACKUP, ns.SaveBackup)
         root:CreateButton(ns.L.EXPORT, ns.ExportModifiers)
@@ -210,7 +210,7 @@ local function CreateMainFrame()
     header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -30, -62)
     header:SetHeight(18)
     local nameHeader = CreateHeader(header, "name", "Player", NAME_WIDTH, "LEFT")
-    nameHeader:SetPoint("LEFT", 4 + PUBLISHER_SIZE + PUBLISHER_GAP, 0)
+    nameHeader:SetPoint("LEFT", 4 + MASTER_SIZE + MASTER_GAP, 0)
     local classHeader = CreateHeader(header, "class", "Class", CLASS_WIDTH, "LEFT")
     classHeader:SetPoint("LEFT", nameHeader, "RIGHT", CLASS_OFFSET, 0)
     local rankHeader = CreateHeader(header, "rank", "Rank", RANK_WIDTH, "LEFT")

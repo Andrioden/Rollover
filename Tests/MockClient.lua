@@ -43,7 +43,7 @@ function MockClient.new(root)
         env.GetGuildInfo = function() return c.guild, nil, nil, "Realm" end
         env.GetNormalizedRealmName = function() return "Realm" end
         env.GetNumGuildMembers = function() return #c.roster end
-        c.roster = { "Publisher", "Follower", "ZeroMember", "ThirdMember" }
+        c.roster = { "Master", "Follower", "ZeroMember", "ThirdMember" }
         c.online = {} -- [roster name] = true; members are offline unless a test says otherwise
         env.GetGuildRosterInfo = function(index)
             return c.roster[index], "Member", index, nil, nil, nil, nil, nil, c.online[c.roster[index]], nil, "MAGE"
@@ -76,12 +76,12 @@ function MockClient.new(root)
         -- WoW owns JSON parsing; mock its success/error results to test our boundary validation.
         env.C_EncodingUtil = {
             DeserializeJSON = function(text)
-                if text == '{"Publisher":7,"ZeroMember":0}' then
-                    return { Publisher = 7, ZeroMember = 0 }
+                if text == '{"Master":7,"ZeroMember":0}' then
+                    return { Master = 7, ZeroMember = 0 }
                 elseif text == '{"bad|name":7}' then return { ["bad|name"] = 7 }
                 elseif text == '{"":7}' then return { [""] = 7 }
                 elseif text == '{"Andriod En":220}' then return { ["Andriod En"] = 220 }
-                elseif text == '{"Publisher":"bad"}' then return { Publisher = "bad" }
+                elseif text == '{"Master":"bad"}' then return { Master = "bad" }
                 elseif text == "{}" then return {} end
                 error("JSON parse error")
             end,
@@ -214,7 +214,7 @@ function MockClient.new(root)
         end
     end
 
-    -- Requests a full-stream sync (updatedAt cleared, like after selecting a new publisher) and returns
+    -- Requests a full-stream sync (updatedAt cleared, like after selecting a new master) and returns
     -- the request ID the addon generated (<server time>-<per-client sequence>).
     local sequences = setmetatable({}, { __mode = "k" })
     local function requestSync(c)

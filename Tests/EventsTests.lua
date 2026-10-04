@@ -20,11 +20,11 @@ test("GUILD_ROSTER_UPDATE is handled while the main window is closed", function(
     events.scripts.OnEvent(events, "GUILD_ROSTER_UPDATE")
 end)
 
-test("PLAYER_ENTERING_WORLD requests the roster on login only when a publisher is set", function()
+test("PLAYER_ENTERING_WORLD requests the roster on login only when a master is set", function()
     events.scripts.OnEvent(events, "PLAYER_ENTERING_WORLD", true, false)
     assert(not f.rosterRequested)
-    f.roster = { "Follower", "Publisher" }
-    assert(f.ns.SelectPublisher("Publisher"))
+    f.roster = { "Follower", "Master" }
+    assert(f.ns.SelectMaster("Master"))
     events.scripts.OnEvent(events, "PLAYER_ENTERING_WORLD", false, false)
     assert(not f.rosterRequested)
     events.scripts.OnEvent(events, "PLAYER_ENTERING_WORLD", true, false)

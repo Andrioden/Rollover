@@ -1,5 +1,5 @@
 -- Run with a standalone Lua interpreter: lua Tests\AutoSyncTests.lua <addon directory>
--- Covers automatic syncing (Modules\GuildSync.lua): publisher selection, login and publisher-online
+-- Covers automatic syncing (Modules\GuildSync.lua): master selection, login and master-online
 -- checks, up-to-date replies, quiet failures and the timestamp/backup rules.
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
@@ -29,12 +29,12 @@ local function lastRequestId()
     return requests[#requests]:match("REQUEST\t([^\t]+)")
 end
 
--- Sends a manual request that the publisher cannot answer, so tests can inject messages with its ID.
-local function holdRequest(publisher, follower)
-    publisher.result = 12
+-- Sends a manual request that the master cannot answer, so tests can inject messages with its ID.
+local function holdRequest(master, follower)
+    master.result = 12
     assert(follower.ns.RequestSync())
     advance(0.5)
-    publisher.result = 0
+    master.result = 0
     return lastRequestId()
 end
 
@@ -43,25 +43,25 @@ local function login(c)
     c.ns.OnGuildRosterUpdate()
 end
 
-local p, f = client("Publisher"), client("Follower")
-f.online.Publisher, p.online.Follower = true, true
-assert(p.ns.SelectPublisher("Publisher") and p.ns.SetModifier("Publisher", 5))
+local p, f = client("Master"), client("Follower")
+f.online.Master, p.online.Follower = true, true
+assert(p.ns.SelectMaster("Master") and p.ns.SetModifier("Master", 5))
 
-test("selecting an online publisher syncs immediately", function()
-    assert(f.ns.SelectPublisher("Publisher"))
+test("selecting an online master syncs immediately", function()
+    assert(f.ns.SelectMaster("Master"))
     advance(2)
-    assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Publisher") == 5)
+    assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Master") == 5)
     assert(f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
     local output = printedSince(f, 0)
-    assert(output:find("Requesting modifiers from Publisher", 1, true) and output:find("Synced 4 modifiers", 1, true))
-    assert(messagesFrom("Follower", "REQUEST")[1]:match("^REQUEST\t[%w%-]+$"), "a new publisher must stream in full")
+    assert(output:find("Requesting modifiers from Master", 1, true) and output:find("Synced 4 modifiers", 1, true))
+    assert(messagesFrom("Follower", "REQUEST")[1]:match("^REQUEST\t[%w%-]+$"), "a new master must stream in full")
 end)
 
-test("selecting an offline publisher waits for it to come online", function()
+test("selecting an offline master waits for it to come online", function()
     local late = client("Late")
-    late.roster = { "Late", "Publisher" }
+    late.roster = { "Late", "Master" }
     local mark = #delivered
-    assert(late.ns.SelectPublisher("Publisher"))
+    assert(late.ns.SelectMaster("Master"))
     advance(2)
     assert(last(late):find("is offline", 1, true) and #delivered == mark)
     assert(late.ns.db.sync.updatedAt == nil and not late.ns.IsSyncPending())
@@ -72,38 +72,38 @@ test("a repeated manual sync reports up to date instead of failing as busy", fun
     local mark, deliveredMark = #f.prints, #delivered
     assert(f.ns.RequestSync())
     advance(2)
-    assert(not f.ns.IsSyncPending() and last(f):find("Already up to date with Publisher", 1, true))
+    assert(not f.ns.IsSyncPending() and last(f):find("Already up to date with Master", 1, true))
     assert(not printedSince(f, mark):find("Sync failed", 1, true))
-    assert(#messagesFrom("Publisher", "CURRENT", deliveredMark) == 1)
+    assert(#messagesFrom("Master", "CURRENT", deliveredMark) == 1)
 end)
 
 test("login check is silent and cheap when up to date", function()
     advance(61)
-    local followerMark, publisherMark, deliveredMark = #f.prints, #p.prints, #delivered
+    local followerMark, masterMark, deliveredMark = #f.prints, #p.prints, #delivered
     local backups = 0
     for _ in pairs(f.ns.db.backups) do backups = backups + 1 end
     login(f)
     advance(5)
-    assert(not f.ns.IsSyncPending() and #f.prints == followerMark and #p.prints == publisherMark)
+    assert(not f.ns.IsSyncPending() and #f.prints == followerMark and #p.prints == masterMark)
     local request = messagesFrom("Follower", "REQUEST", deliveredMark)[1]
     assert(request and request:match("\t" .. f.ns.db.sync.updatedAt .. "$"), "REQUEST carries updatedAt")
-    assert(#messagesFrom("Publisher", "CURRENT", deliveredMark) == 1 and #messagesFrom("Publisher", "BEGIN", deliveredMark) == 0)
+    assert(#messagesFrom("Master", "CURRENT", deliveredMark) == 1 and #messagesFrom("Master", "BEGIN", deliveredMark) == 0)
     local after = 0
     for _ in pairs(f.ns.db.backups) do after = after + 1 end
     assert(after == backups)
 end)
 
-test("a newer publisher state is streamed with a tagged backup", function()
+test("a newer master state is streamed with a tagged backup", function()
     advance(61)
-    assert(p.ns.SetModifier("Publisher", 9))
-    local publisherMark, backups = #p.prints, autoBackups(f)
+    assert(p.ns.SetModifier("Master", 9))
+    local masterMark, backups = #p.prints, autoBackups(f)
     login(f)
     advance(5)
-    assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Publisher") == 9)
+    assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Master") == 9)
     assert(f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
     assert(autoBackups(f) == backups + 1)
-    assert(printedSince(p, publisherMark):find("Follower requested a sync", 1, true))
-    assert(printedSince(f, 0):find("Synced 4 modifiers from Publisher", 1, true))
+    assert(printedSince(p, masterMark):find("Follower requested a sync", 1, true))
+    assert(printedSince(f, 0):find("Synced 4 modifiers from Master", 1, true))
 end)
 
 test("a repeated check inside the cooldown is skipped", function()
@@ -113,25 +113,25 @@ test("a repeated check inside the cooldown is skipped", function()
     assert(#messagesFrom("Follower", "REQUEST", mark) == 0)
 end)
 
-test("the publisher coming online triggers one check", function()
+test("the master coming online triggers one check", function()
     advance(61)
-    assert(p.ns.SetModifier("Publisher", 11))
-    f.online.Publisher = false
+    assert(p.ns.SetModifier("Master", 11))
+    f.online.Master = false
     f.ns.OnGuildRosterUpdate()
     advance(10)
-    assert(f.ns.GetModifier("Publisher") == 9, "an offline publisher is not contacted")
+    assert(f.ns.GetModifier("Master") == 9, "an offline master is not contacted")
     local mark = #delivered
-    f.online.Publisher = true
+    f.online.Master = true
     f.ns.OnGuildRosterUpdate()
     f.ns.OnGuildRosterUpdate()
     advance(2)
-    assert(#messagesFrom("Follower", "REQUEST", mark) == 0, "the publisher's addon gets time to settle")
+    assert(#messagesFrom("Follower", "REQUEST", mark) == 0, "the master's addon gets time to settle")
     advance(10)
     assert(#messagesFrom("Follower", "REQUEST", mark) == 1)
-    assert(f.ns.GetModifier("Publisher") == 11 and f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
+    assert(f.ns.GetModifier("Master") == 11 and f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
 end)
 
-test("the publisher's own checks and missing publishers do nothing", function()
+test("the master's own checks and missing masters do nothing", function()
     local mark = #delivered
     login(p)
     local lone = client("Lone")
@@ -145,7 +145,7 @@ test("failures before BEGIN stay out of chat and retry once", function()
     local ghost = client("Ghost Follower")
     ghost.roster = { "Ghost", "Ghost Follower" }
     ghost.online.Ghost = true
-    assert(ghost.ns.SelectPublisher("Ghost"))
+    assert(ghost.ns.SelectMaster("Ghost"))
     ghost.ns.CancelSync()
     ghost.ns.db.sync.updatedAt = 10
     local mark, printMark = #delivered, #ghost.prints
@@ -181,14 +181,14 @@ test("an interrupted stream clears updatedAt so the next check repairs it", func
     advance(61)
     assert(f.ns.db.sync.updatedAt)
     local id = holdRequest(p, f)
-    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t5", "WHISPER", "Publisher")
+    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t5", "WHISPER", "Master")
     assert(f.ns.db.sync.updatedAt == nil)
     f.ns.CancelSync()
     assert(f.ns.db.sync.updatedAt == nil)
     advance(35)
     login(f)
     advance(5)
-    assert(f.ns.GetModifier("Publisher") == 11 and f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
+    assert(f.ns.GetModifier("Master") == 11 and f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
 end)
 
 test("malformed and unexpected messages are rejected", function()
@@ -200,23 +200,23 @@ test("malformed and unexpected messages are rejected", function()
     assert(#delivered == mark)
     f.ns.db.sync.updatedAt = nil -- CURRENT is only valid for a request that sent updatedAt
     local id = holdRequest(p, f)
-    f.ns.OnSyncMessage("Rollover", "CURRENT\t" .. id, "WHISPER", "Publisher")
+    f.ns.OnSyncMessage("Rollover", "CURRENT\t" .. id, "WHISPER", "Master")
     assert(not f.ns.IsSyncPending() and last(f):find("Sync failed", 1, true))
     advance(35)
 end)
 
 test("a second changed sync inside the rate limit explains the wait", function()
     local second = client("Second")
-    second.online.Publisher = true
+    second.online.Master = true
     p.online.Second = true
-    p.roster, second.roster = { "Publisher", "Follower", "Second" }, { "Publisher", "Follower", "Second" }
-    assert(second.ns.SelectPublisher("Publisher"))
+    p.roster, second.roster = { "Master", "Follower", "Second" }, { "Master", "Follower", "Second" }
+    assert(second.ns.SelectMaster("Master"))
     advance(3)
-    assert(p.ns.SetModifier("Publisher", 6))
+    assert(p.ns.SetModifier("Master", 6))
     assert(second.ns.RequestSync())
     advance(3)
-    assert(not second.ns.IsSyncPending() and last(second):find("publisher is busy or was asked too recently", 1, true))
+    assert(not second.ns.IsSyncPending() and last(second):find("master is busy or was asked too recently", 1, true))
     assert(not last(second):find("already active", 1, true))
-    p.roster = { "Publisher", "Follower", "ZeroMember", "ThirdMember" }
+    p.roster = { "Master", "Follower", "ZeroMember", "ThirdMember" }
     advance(61)
 end)

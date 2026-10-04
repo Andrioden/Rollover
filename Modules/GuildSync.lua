@@ -4,15 +4,15 @@ local PREFIX = "Rollover"
 local TIMEOUT, MAX_MEMBERS = 1800, ns.MAX_MEMBERS
 -- The server allows a burst of ~10 messages per prefix, then 1/sec; throttled sends retry.
 local SEND_INTERVAL, THROTTLE_RETRY, LOCKDOWN_RETRY = 0.2, 1, 5
--- Automatic checks: how long to wait for the publisher's reply, cooldown between checks,
--- and delays that let a freshly loaded roster/publisher addon settle.
+-- Automatic checks: how long to wait for the master's reply, cooldown between checks,
+-- and delays that let a freshly loaded roster/master addon settle.
 local CHECK_TIMEOUT, CHECK_RETRY_DELAY, CHECK_COOLDOWN = 15, 5, 60
 local LOGIN_DELAY, ONLINE_DELAY = 2, 5
 local MAX_STAMP = 2 ^ 40
 local queue, recentRequests = {}, {}
 local pending, timer, ready
 local sequence = 0
-local publisherOnline, awaitingLogin, lastAutoCheck
+local masterOnline, awaitingLogin, lastAutoCheck
 
 -- Ends the active transfer with a chat message. Once BEGIN arrived the local table was
 -- cleared, so the player is also told that the data may be incomplete. Automatic checks
@@ -60,11 +60,11 @@ local function Enqueue(task)
 end
 
 -- Queued messages are dropped once their target left the roster, their request ended,
--- or the owner of a snapshot stopped publishing.
+-- or the owner of a snapshot stopped being master.
 local function IsCurrent(task)
     if not ns.ResolveGuildMember(task.target) then return false end
     if task.request then return pending == task.request end
-    return not task.snapshot or ns.IsPublisher()
+    return not task.snapshot or ns.IsMaster()
 end
 
 Pump = function()
@@ -121,15 +121,15 @@ function ns.CancelSync()
     end
 end
 
--- Requests send the stored updatedAt so an up-to-date publisher answers CURRENT instead of
--- streaming. It is empty after a new publisher was selected or an interrupted stream, which
+-- Requests send the stored updatedAt so an up-to-date master answers CURRENT instead of
+-- streaming. It is empty after a new master was selected or an interrupted stream, which
 -- forces a full stream.
 local AutoCheck
 local function StartRequest(auto, attempt)
     sequence = sequence + 1
     local transfer = {
         id = string.format("%d-%d", GetServerTime(), sequence),
-        sender = ns.db.sync.publisher, received = 0, names = {}, auto = auto,
+        sender = ns.db.sync.master, received = 0, names = {}, auto = auto,
         have = ns.db.sync.updatedAt,
     }
     pending = transfer
@@ -151,9 +151,9 @@ local function StartRequest(auto, attempt)
 end
 
 AutoCheck = function(attempt)
-    local source = ns.db.sync.publisher
-    if not ready or pending or not source or not IsInGuild() or ns.IsPublisher() then return end
-    if ns.IsGuildMemberOnline(source) ~= true then ns.Debug("Automatic sync check skipped: publisher offline"); return end
+    local source = ns.db.sync.master
+    if not ready or pending or not source or not IsInGuild() or ns.IsMaster() then return end
+    if ns.IsGuildMemberOnline(source) ~= true then ns.Debug("Automatic sync check skipped: master offline"); return end
     if #queue >= 3 then return end
     if attempt == 1 then
         local now = GetTime()
@@ -167,25 +167,25 @@ AutoCheck = function(attempt)
     StartRequest(true, attempt)
 end
 
-function ns.SelectPublisher(name)
+function ns.SelectMaster(name)
     if pending then ns.Print(ns.L.BUSY); return false end
     name = ns.ResolveGuildMember(name)
     if not name then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
-    if name == ns.db.sync.publisher then return true end
-    ns.db.sync.publisher = name
-    publisherOnline = nil
-    if ns.IsPublisher() then
+    if name == ns.db.sync.master then return true end
+    ns.db.sync.master = name
+    masterOnline = nil
+    if ns.IsMaster() then
         if not ns.db.sync.updatedAt then ns.TouchModifiers() end
-        ns.Print(ns.L.LOCAL_PUBLISHER)
+        ns.Print(ns.L.LOCAL_MASTER)
     else
-        -- The local table came from somewhere else, so the new publisher must always stream.
+        -- The local table came from somewhere else, so the new master must always stream.
         ns.db.sync.updatedAt = nil
-        publisherOnline = ns.IsGuildMemberOnline(name)
-        if publisherOnline then
-            ns.Print(string.format(ns.L.PUBLISHER_SET, name))
+        masterOnline = ns.IsGuildMemberOnline(name)
+        if masterOnline then
+            ns.Print(string.format(ns.L.MASTER_SET, name))
             ns.RequestSync()
         else
-            ns.Print(string.format(ns.L.PUBLISHER_OFFLINE, name))
+            ns.Print(string.format(ns.L.MASTER_OFFLINE, name))
         end
     end
     ns.RefreshRoster()
@@ -195,9 +195,9 @@ end
 function ns.RequestSync()
     if not ready then ns.Print(ns.L.PREFIX_FAILED); return false end
     if pending then ns.Print(ns.L.BUSY); return false end
-    local source = ns.db.sync.publisher
-    if not source then ns.Print(ns.L.SELECT_PUBLISHER); return false end
-    if ns.IsPublisher() then ns.Print(ns.L.LOCAL_PUBLISHER); return false end
+    local source = ns.db.sync.master
+    if not source then ns.Print(ns.L.SELECT_MASTER); return false end
+    if ns.IsMaster() then ns.Print(ns.L.LOCAL_MASTER); return false end
     if not IsInGuild() then ns.Print(ns.L.NO_GUILD); return false end
     if not ns.ResolveGuildMember(source) then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
     if #queue >= 3 then ns.Print(ns.L.BUSY); return false end
@@ -207,7 +207,7 @@ function ns.RequestSync()
 end
 
 local function SendError(sender, id, code)
-    local reasons = { NOT_PUBLISHER = ns.L.NOT_PUBLISHING_LOCAL, BUSY = ns.L.REQUESTED_TOO_SOON, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
+    local reasons = { NOT_MASTER = ns.L.NOT_MASTER_LOCAL, BUSY = ns.L.REQUESTED_TOO_SOON, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
     ns.Print(string.format(ns.L.SYNC_DECLINED, sender, reasons[code]))
     Enqueue({ target = sender, messages = { Message("ERROR", id, code) } })
 end
@@ -230,7 +230,7 @@ end
 
 local function Respond(sender, id, have)
     -- An up-to-date follower costs one tiny reply, is not rate limited and is not announced.
-    if ns.IsPublisher() then
+    if ns.IsMaster() then
         if not ns.db.sync.updatedAt then ns.TouchModifiers() end
         if have == ns.db.sync.updatedAt then
             if #queue >= 2 then ns.Debug("Dropped CURRENT reply: send queue is busy"); return end
@@ -245,7 +245,7 @@ local function Respond(sender, id, have)
         return
     end
     recentRequests[sender] = now
-    if not ns.IsPublisher() then SendError(sender, id, "NOT_PUBLISHER"); return end
+    if not ns.IsMaster() then SendError(sender, id, "NOT_MASTER"); return end
     if #queue >= 2 then SendError(sender, id, "BUSY"); return end
     local modifiers = CopyTable(ns.db.modifiers)
     for _, entry in ipairs(ns.GetRosterList("name", true)) do
@@ -264,24 +264,24 @@ local function Respond(sender, id, have)
     end
 end
 
--- A transfer cannot continue once its publisher left the guild roster.
+-- A transfer cannot continue once its master left the guild roster.
 function ns.OnSyncContextChanged()
     if pending and not ns.ResolveGuildMember(pending.sender) then Fail(ns.L.NO_GUILD) end
 end
 
 -- Roster updates also announce guild members coming online (verified on the Forever beta),
--- so a publisher logging in is detected as an offline -> online change of the last snapshot.
+-- so a master logging in is detected as an offline -> online change of the last snapshot.
 function ns.OnGuildRosterUpdate()
     ns.OnSyncContextChanged()
-    local source = ns.db.sync.publisher
-    if not source or ns.IsPublisher() then
-        publisherOnline, awaitingLogin = nil, false
+    local source = ns.db.sync.master
+    if not source or ns.IsMaster() then
+        masterOnline, awaitingLogin = nil, false
         return
     end
     local online = ns.IsGuildMemberOnline(source)
     if online == nil then return end
-    local was = publisherOnline
-    publisherOnline = online
+    local was = masterOnline
+    masterOnline = online
     if awaitingLogin then
         awaitingLogin = false
         if online then C_Timer.After(LOGIN_DELAY, function() AutoCheck(1) end) end
@@ -290,9 +290,9 @@ function ns.OnGuildRosterUpdate()
     end
 end
 
--- Login/reload: check once the roster shows whether the publisher is online.
+-- Login/reload: check once the roster shows whether the master is online.
 function ns.OnPlayerEnteringWorld(isLogin, isReload)
-    if not (isLogin or isReload) or not ns.db.sync.publisher then return end
+    if not (isLogin or isReload) or not ns.db.sync.master then return end
     awaitingLogin = true
     ns.RequestGuildRoster()
 end
@@ -379,7 +379,7 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         end
         ns.RefreshRoster()
     elseif fields[1] == "ERROR" then
-        local errors = { NOT_PUBLISHER = ns.L.NOT_PUBLISHER, BUSY = ns.L.PUBLISHER_BUSY, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
+        local errors = { NOT_MASTER = ns.L.NOT_MASTER, BUSY = ns.L.MASTER_BUSY, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
         Fail(#fields == 3 and errors[fields[3]] or ns.L.INVALID_TRANSFER)
     else
         Fail(ns.L.INVALID_TRANSFER)
