@@ -214,9 +214,11 @@ function MockClient.new(root)
         end
     end
 
-    -- Requests a sync and returns the request ID the addon generated (<server time>-<per-client sequence>).
+    -- Requests a full-stream sync (updatedAt cleared, like after selecting a new publisher) and returns
+    -- the request ID the addon generated (<server time>-<per-client sequence>).
     local sequences = setmetatable({}, { __mode = "k" })
     local function requestSync(c)
+        c.ns.db.sync.updatedAt = nil
         if not c.ns.RequestSync() then return nil end
         sequences[c] = (sequences[c] or 0) + 1
         return string.format("%d-%d", c.env.GetServerTime(), sequences[c])

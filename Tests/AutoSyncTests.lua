@@ -67,6 +67,16 @@ test("selecting an offline publisher waits for it to come online", function()
     assert(late.ns.db.sync.updatedAt == nil and not late.ns.IsSyncPending())
 end)
 
+test("a repeated manual sync reports up to date instead of failing as busy", function()
+    advance(1)
+    local mark, deliveredMark = #f.prints, #delivered
+    assert(f.ns.RequestSync())
+    advance(2)
+    assert(not f.ns.IsSyncPending() and last(f):find("Already up to date with Publisher", 1, true))
+    assert(not printedSince(f, mark):find("Sync failed", 1, true))
+    assert(#messagesFrom("Publisher", "CURRENT", deliveredMark) == 1)
+end)
+
 test("login check is silent and cheap when up to date", function()
     advance(61)
     local followerMark, publisherMark, deliveredMark = #f.prints, #p.prints, #delivered
@@ -188,8 +198,25 @@ test("malformed and unexpected messages are rejected", function()
     p.ns.OnSyncMessage("Rollover", "REQUEST\tbad-id\t1\t2", "WHISPER", "Follower")
     advance(2)
     assert(#delivered == mark)
+    f.ns.db.sync.updatedAt = nil -- CURRENT is only valid for a request that sent updatedAt
     local id = holdRequest(p, f)
     f.ns.OnSyncMessage("Rollover", "CURRENT\t" .. id, "WHISPER", "Publisher")
     assert(not f.ns.IsSyncPending() and last(f):find("Sync failed", 1, true))
     advance(35)
+end)
+
+test("a second changed sync inside the rate limit explains the wait", function()
+    local second = client("Second")
+    second.online.Publisher = true
+    p.online.Second = true
+    p.roster, second.roster = { "Publisher", "Follower", "Second" }, { "Publisher", "Follower", "Second" }
+    assert(second.ns.SelectPublisher("Publisher"))
+    advance(3)
+    assert(p.ns.SetModifier("Publisher", 6))
+    assert(second.ns.RequestSync())
+    advance(3)
+    assert(not second.ns.IsSyncPending() and last(second):find("publisher is busy or was asked too recently", 1, true))
+    assert(not last(second):find("already active", 1, true))
+    p.roster = { "Publisher", "Follower", "ZeroMember", "ThirdMember" }
+    advance(61)
 end)

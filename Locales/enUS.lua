@@ -48,7 +48,10 @@ ns.L = {
     PREFIX_FAILED = "Could not register the Rollover message prefix.",
     INVALID_TRANSFER = "Invalid or incomplete modifier stream.",
     NOT_PUBLISHER = "The selected player is not publishing; they must click the crown next to their own name.",
-    BUSY = "A sync is already active or the publisher is busy.",
+    BUSY = "A sync is already active.",
+    PUBLISHER_BUSY = "The publisher is busy or was asked too recently; wait a few seconds and try again.",
+    REQUESTED_TOO_SOON = "asked again too soon or the send queue is busy.",
+    UP_TO_DATE = "Already up to date with %s.",
     LOADING_ROSTER = "Loading guild roster...",
     NOT_IN_GUILD = "You are not in a guild.",
 }

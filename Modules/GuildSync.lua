@@ -121,15 +121,16 @@ function ns.CancelSync()
     end
 end
 
--- Automatic checks send the stored updatedAt so an up-to-date publisher answers CURRENT
--- instead of streaming. Manual and publisher-change syncs omit it and always stream.
+-- Requests send the stored updatedAt so an up-to-date publisher answers CURRENT instead of
+-- streaming. It is empty after a new publisher was selected or an interrupted stream, which
+-- forces a full stream.
 local AutoCheck
 local function StartRequest(auto, attempt)
     sequence = sequence + 1
     local transfer = {
         id = string.format("%d-%d", GetServerTime(), sequence),
         sender = ns.db.sync.publisher, received = 0, names = {}, auto = auto,
-        have = auto and ns.db.sync.updatedAt or nil,
+        have = ns.db.sync.updatedAt,
     }
     pending = transfer
     local request = transfer.have and Message("REQUEST", transfer.id, transfer.have) or Message("REQUEST", transfer.id)
@@ -206,7 +207,7 @@ function ns.RequestSync()
 end
 
 local function SendError(sender, id, code)
-    local reasons = { NOT_PUBLISHER = ns.L.NOT_PUBLISHING_LOCAL, BUSY = ns.L.BUSY, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
+    local reasons = { NOT_PUBLISHER = ns.L.NOT_PUBLISHING_LOCAL, BUSY = ns.L.REQUESTED_TOO_SOON, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
     ns.Print(string.format(ns.L.SYNC_DECLINED, sender, reasons[code]))
     Enqueue({ target = sender, messages = { Message("ERROR", id, code) } })
 end
@@ -369,11 +370,16 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         ns.RefreshRoster()
     elseif fields[1] == "CURRENT" then
         if #fields ~= 2 or pending.count or not pending.have then Fail(ns.L.INVALID_TRANSFER); return end
+        local auto = pending.auto
         pending = nil
-        ns.Debug(member .. " has no newer modifiers")
+        if auto then
+            ns.Debug(member .. " has no newer modifiers")
+        else
+            ns.Print(string.format(ns.L.UP_TO_DATE, member))
+        end
         ns.RefreshRoster()
     elseif fields[1] == "ERROR" then
-        local errors = { NOT_PUBLISHER = ns.L.NOT_PUBLISHER, BUSY = ns.L.BUSY, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
+        local errors = { NOT_PUBLISHER = ns.L.NOT_PUBLISHER, BUSY = ns.L.PUBLISHER_BUSY, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
         Fail(#fields == 3 and errors[fields[3]] or ns.L.INVALID_TRANSFER)
     else
         Fail(ns.L.INVALID_TRANSFER)
