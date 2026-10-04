@@ -2,6 +2,8 @@ local addonName, ns = ...
 
 local PREFIX, PROTOCOL = "Rollover", "1"
 local TIMEOUT, MAX_MEMBERS = 1800, ns.MAX_MEMBERS
+-- The server allows a burst of ~10 messages per prefix, then 1/sec; throttled sends retry.
+local SEND_INTERVAL, THROTTLE_RETRY, LOCKDOWN_RETRY = 0.2, 1, 5
 local queue, recentRequests = {}, {}
 local pending, timer, ready
 local sequence = 0
@@ -45,7 +47,7 @@ local function Enqueue(task)
     if #queue >= 3 then ns.Debug("Sync send queue is full"); return false end
     task.index, task.expires = 1, GetTime() + TIMEOUT
     queue[#queue + 1] = task
-    Schedule(1)
+    Schedule(0)
     return true
 end
 
@@ -70,13 +72,18 @@ Pump = function()
             task.index = task.index + 1
             task.deferred = nil
             if task.index > #task.messages then table.remove(queue, 1) end
-        elseif result == results.AddOnMessageLockdown or result == results.AddonMessageThrottle then
-            -- Retried every 5 seconds; tell the player once per deferral.
+        elseif result == results.AddonMessageThrottle then
+            -- Normal once the burst allowance is used up; it regains 1 message per second.
+            ns.Debug("Sync send throttled; retrying")
+            Schedule(THROTTLE_RETRY)
+            return
+        elseif result == results.AddOnMessageLockdown then
+            -- Tell the player once per deferral.
             if not task.deferred then
                 task.deferred = true
                 ns.Print(ns.L.DEFERRED)
             end
-            Schedule(5)
+            Schedule(LOCKDOWN_RETRY)
             return
         else
             table.remove(queue, 1)
@@ -84,7 +91,11 @@ Pump = function()
             if task.request and pending == task.request then Fail(message) else ns.Print(message) end
         end
     end
-    if #queue > 0 then Schedule(1) end
+    if #queue > 0 then Schedule(SEND_INTERVAL) end
+end
+
+local function FormatEntry(name, value)
+    return string.format("%s (%s)", name, value > 0 and "+" .. value or tostring(value))
 end
 
 function ns.IsSyncPending()
@@ -136,7 +147,25 @@ function ns.RequestSync()
 end
 
 local function SendError(sender, id, code)
+    local reasons = { NOT_PUBLISHER = ns.L.NOT_PUBLISHING_LOCAL, BUSY = ns.L.BUSY, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
+    ns.Print(string.format(ns.L.SYNC_DECLINED, sender, reasons[code]))
     Enqueue({ target = sender, messages = { Message("ERROR", id, code) } })
+end
+
+-- Packs as many name/value pairs into each VALUE message as fit in 255 bytes:
+-- VALUE, id, index of the first entry, then name, value, name, value, ...
+local function ValueMessages(id, names, modifiers)
+    local messages, current, first = {}, nil, nil
+    for i, name in ipairs(names) do
+        local entry = "\t" .. name .. "\t" .. string.format("%.17g", modifiers[name])
+        if current and #current + #entry > 255 then
+            messages[#messages + 1] = current
+            current = nil
+        end
+        current = (current or Message("VALUE", id, i)) .. entry
+    end
+    if current then messages[#messages + 1] = current end
+    return messages
 end
 
 local function Respond(sender, id)
@@ -158,11 +187,11 @@ local function Respond(sender, id)
     for name in pairs(modifiers) do names[#names + 1] = name end
     table.sort(names)
     local messages = { Message("BEGIN", id, #names) }
-    for i, name in ipairs(names) do
-        messages[#messages + 1] = Message("VALUE", id, i, name, string.format("%.17g", modifiers[name]))
-    end
+    for _, message in ipairs(ValueMessages(id, names, modifiers)) do messages[#messages + 1] = message end
     messages[#messages + 1] = Message("END", id, #names)
-    Enqueue({ target = sender, snapshot = true, messages = messages })
+    if Enqueue({ target = sender, snapshot = true, messages = messages }) then
+        ns.Print(string.format(ns.L.SYNC_REQUESTED, sender, #names))
+    end
 end
 
 -- A transfer cannot continue once its publisher left the guild roster.
@@ -197,16 +226,31 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         ns.Print(string.format(ns.L.RECEIVING, count, member))
         ns.RefreshRoster()
     elseif fields[2] == "VALUE" then
-        local index = #fields == 6 and Integer(fields[4], MAX_MEMBERS)
-        local name, value = fields[5], tonumber(fields[6])
-        if not pending.count or not index or index ~= pending.received + 1 or index > pending.count
-            or not ns.IsValidMemberName(name) or not ns.IsValidModifier(value) or pending.names[name] then
+        local index = #fields >= 6 and #fields % 2 == 0 and Integer(fields[4], MAX_MEMBERS)
+        local last = index and index + (#fields - 4) / 2 - 1
+        if not pending.count or not index or index ~= pending.received + 1 or last > pending.count then
             Fail(ns.L.INVALID_TRANSFER)
             return
         end
-        pending.names[name] = true
-        pending.received = index
-        ns.db.modifiers[name] = value
+        local entries, seen = {}, {}
+        for i = 5, #fields, 2 do
+            local name, value = fields[i], tonumber(fields[i + 1])
+            if not ns.IsValidMemberName(name) or not ns.IsValidModifier(value)
+                or pending.names[name] or seen[name] then
+                Fail(ns.L.INVALID_TRANSFER)
+                return
+            end
+            seen[name] = true
+            entries[#entries + 1] = { name = name, value = value }
+        end
+        local labels = {}
+        for _, entry in ipairs(entries) do
+            pending.names[entry.name] = true
+            ns.db.modifiers[entry.name] = entry.value
+            labels[#labels + 1] = FormatEntry(entry.name, entry.value)
+        end
+        pending.received = last
+        ns.Print(string.format(ns.L.SYNCED_ENTRIES, last, pending.count, table.concat(labels, ", ")))
         ns.RefreshRoster()
     elseif fields[2] == "END" then
         local count = #fields == 4 and Integer(fields[4], MAX_MEMBERS)

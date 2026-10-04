@@ -76,12 +76,16 @@ assert(not f.ns.ImportModifiers("{}") and not f.ns.SelectPublisher("Follower"))
 local before
 for key, state in pairs(f.ns.db.backups) do if state.OldMember == 42 then before = key end end
 assert(before)
-advance(3.1)
+local publisherMark = #p.prints
+advance(0.1)
 assert(f.ns.IsSyncPending() and f.ns.GetModifier("OldMember") == 0)
 assert(f.ns.GetModifier("Follower") == 0)
-advance(10)
+assert(printedSince(p, publisherMark):find("Follower requested a sync; sending 5 modifiers.", 1, true))
+advance(1)
 assert(not f.ns.IsSyncPending())
 local syncOutput = printedSince(f, syncMark)
+-- All five entries fit in one VALUE message and are listed together.
+assert(syncOutput:find("Synced 5/5: Follower (0), FormerMember (-4), Publisher (+12.5), ThirdMember (0), ZeroMember (0)", 1, true))
 assert(syncOutput:find("Requesting modifiers from Publisher", 1, true))
 assert(syncOutput:find("Receiving 5 modifiers from Publisher", 1, true))
 assert(syncOutput:find("Synced 5 modifiers from Publisher", 1, true))
@@ -131,9 +135,10 @@ f.ns.CancelSync()
 assert(not f.ns.IsSyncPending() and last(f):find("cancelled", 1, true))
 advance(35)
 f.result = 3
+local deferredBefore = count(f, f.ns.L.DEFERRED)
 assert(f.ns.RequestSync())
 advance(2)
-assert(f.ns.IsSyncPending() and last(f):find(f.ns.L.DEFERRED, 1, true))
+assert(f.ns.IsSyncPending() and count(f, f.ns.L.DEFERRED) == deferredBefore) -- throttling is silent
 f.result = 0
 advance(20)
 assert(not f.ns.IsSyncPending() and last(f):find("Synced", 1, true))
@@ -300,4 +305,30 @@ rp.ns.ExportModifiers()
 assert(rp.frames.RolloverExportFrame.edit:GetText():find('"Andriod En":220', 1, true))
 for _, line in ipairs(rf.prints) do assert(not line:find("unambiguous", 1, true), line) end
 for _, message in ipairs(delivered) do assert(#message.text <= 255) end
+
+-- Large rosters are packed into several VALUE messages and arrive quickly.
+local bp, bf = client("Big Publisher"), client("Big Follower")
+local bigRoster = { "Big Publisher", "Big Follower" }
+for i = 1, 98 do bigRoster[#bigRoster + 1] = string.format("Guild Member Number %03d", i) end
+bp.roster, bf.roster = bigRoster, bigRoster
+for i = 3, #bigRoster do bp.ns.db.modifiers[bigRoster[i]] = i * 1.5 end
+assert(bp.ns.SelectPublisher("Big Publisher") and bf.ns.SelectPublisher("Big Publisher"))
+local bigMark, valueMessages = #bf.prints, 0
+local deliveredBefore = #delivered
+assert(bf.ns.RequestSync())
+advance(10)
+assert(not bf.ns.IsSyncPending() and last(bf):find("Synced 100 modifiers from Big Publisher", 1, true))
+for i = deliveredBefore + 1, #delivered do
+    if delivered[i].text:find("\tVALUE\t", 1, true) then valueMessages = valueMessages + 1 end
+end
+assert(valueMessages > 1 and valueMessages < 30, valueMessages)
+assert(count(bf, "Synced ") - 1 == valueMessages and bf.ns.GetModifier(bigRoster[100]) == 150)
+assert(printedSince(bf, bigMark):find("Synced 100/100:", 1, true))
+-- A packed VALUE with a duplicate name inside the same message fails the transfer.
+advance(35)
+assert(bf.ns.RequestSync())
+local dupId = tostring(bf.env.GetServerTime()) .. "-2"
+bf.ns.OnSyncMessage("Rollover", "1\tBEGIN\t" .. dupId .. "\t2", "WHISPER", "Big Publisher")
+bf.ns.OnSyncMessage("Rollover", "1\tVALUE\t" .. dupId .. "\t1\tBig Follower\t1\tBig Follower\t2", "WHISPER", "Big Publisher")
+assert(not bf.ns.IsSyncPending() and printedSince(bf, bigMark):find("Invalid or incomplete", 1, true))
 print("PASS: backups, JSON boundary validation, export/import frames, icon tools menu, follower permissions, streaming sync, partial failure, spoof guards, lockdown, send failure, timeout and event wiring")
