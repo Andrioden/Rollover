@@ -3,11 +3,11 @@
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
 local harness = require("Tests.MockClient").new(root)
-local advance, client = harness.advance, harness.client
+local client, last, backupCount = harness.client, harness.last, harness.backupCount
 local test = harness.suite("Import/export and text windows")
 
 local f = client("Follower")
-local exportFrame, importFrame
+assert(f.ns.SelectMaster("Follower"))
 
 local function json(modifiers, stamp)
     return '{"updatedAt":' .. stamp .. ',"modifiers":' .. modifiers .. '}'
@@ -16,109 +16,76 @@ end
 -- Server time of the mocked client; imports may not be from the future.
 local function T() return f.env.GetServerTime() end
 
-test("import rejects invalid JSON and keeps current data", function()
-    assert(f.ns.SelectMaster("Follower"))
+test("invalid JSON, shapes, names, values and stamps are rejected without changes", function()
     f.ns.db.modifiers = { OldMember = 42 }
-    assert(not f.ns.ImportModifiers(json('{"bad|name":7}', T())))
-    assert(not f.ns.ImportModifiers(json('{"":7}', T())))
-    assert(not f.ns.ImportModifiers(json('{"Master":"bad"}', T())))
-    assert(not f.ns.ImportModifiers("{bad}"))
-    assert(not f.ns.ImportModifiers("[]"))
-    assert(not f.ns.ImportModifiers('{"Master":7}'), "the old flat format has no modifiers key")
-    assert(not f.ns.ImportModifiers('{"updatedAt":' .. T() .. '}'))
-    assert(not f.ns.ImportModifiers(string.rep(" ", 200001)))
-    assert(f.ns.GetModifier("OldMember") == 42)
+    local backups = backupCount(f)
+    local invalid = {
+        "{bad}", "[]", "5", '{"Master":7}', '{"updatedAt":' .. T() .. '}', string.rep(" ", 200001),
+        json('{"bad|name":7}', T()), json('{"":7}', T()), json('{"Master":"bad"}', T()),
+        json("{}", '"text"'), json("{}", -1), json("{}", 1.5), json("{}", T() + 1), json("{}", "1e300"),
+    }
+    for _, text in ipairs(invalid) do assert(not f.ns.ImportModifiers(text), text:sub(1, 60)) end
+    assert(f.ns.GetModifier("OldMember") == 42 and backupCount(f) == backups)
 end)
 
-test("import rejects an invalid updatedAt", function()
-    for _, stamp in ipairs({ '"text"', "-1", "1.5", T() + 1, "1e300" }) do
-        assert(not f.ns.ImportModifiers(json('{"Master":7}', stamp)), tostring(stamp))
-    end
-    assert(f.ns.GetModifier("OldMember") == 42)
+test("imports are limited to ns.MAX_MEMBERS entries", function()
+    local entries = {}
+    for i = 1, f.ns.MAX_MEMBERS + 1 do entries[i] = '"Member' .. i .. '":0' end
+    assert(not f.ns.ImportModifiers(json("{" .. table.concat(entries, ",") .. "}", T())))
+    assert(last(f):find(string.format(f.ns.L.STATE_TOO_LARGE, f.ns.MAX_MEMBERS), 1, true))
+    entries[#entries] = nil
+    assert(f.ns.ImportModifiers(json("{" .. table.concat(entries, ",") .. "}", T() - 10)))
 end)
 
-test("import replaces the modifier table", function()
-    assert(f.ns.ImportModifiers(json('{"Master":7,"ZeroMember":0}', T())))
-    assert(f.ns.GetModifier("Master") == 7 and f.ns.GetModifier("OldMember") == 0)
-    assert(f.ns.db.sync.updatedAt == T(), "the data keeps the age it came with")
+test("import replaces the table, keeps its own age and backs up the previous state", function()
+    local backups = backupCount(f)
+    assert(f.ns.ImportModifiers(json('{"Master":7,"ZeroMember":0}', T() - 10)))
+    assert(f.ns.GetModifier("Master") == 7 and f.ns.GetModifier("Member1") == 0)
+    assert(f.ns.GetUpdatedAt() == T() - 10 and backupCount(f) == backups + 1)
 end)
 
-test("import of data older than the current state is blocked, equal or newer is accepted", function()
-    advance(100)
-    local stamp = f.ns.db.sync.updatedAt
-    assert(stamp)
-    local backups = 0
-    for _ in pairs(f.ns.db.backups) do backups = backups + 1 end
-    assert(not f.ns.ImportModifiers(json('{"Master":99}', stamp - 1)))
-    assert(f.ns.GetModifier("Master") == 7 and f.ns.db.sync.updatedAt == stamp)
-    local after = 0
-    for _ in pairs(f.ns.db.backups) do after = after + 1 end
-    assert(after == backups, "a blocked import does not touch backups")
-    local output = table.concat(f.prints, "\n")
-    assert(output:find("Import blocked", 1, true))
+test("older imports are blocked; equal or newer ones are accepted", function()
+    local stamp = f.ns.GetUpdatedAt()
+    assert(not f.ns.ImportModifiers(json('{"Master":99}', stamp - 1)) and last(f):find("Import blocked", 1, true))
+    assert(not f.ns.ImportModifiers('{"modifiers":{"Master":99}}'), "a missing updatedAt is the oldest")
+    assert(f.ns.GetModifier("Master") == 7)
     assert(f.ns.ImportModifiers(json('{"Master":8}', stamp)) and f.ns.GetModifier("Master") == 8)
-    assert(f.ns.db.sync.updatedAt == stamp, "an import never makes data look newer than it is")
-    assert(f.ns.ImportModifiers(json('{"Master":9}', T())) and f.ns.GetModifier("Master") == 9)
-    assert(f.ns.db.sync.updatedAt == T())
+    assert(f.ns.ImportModifiers(json('{"Master":9}', stamp + 1)) and f.ns.GetUpdatedAt() == stamp + 1)
 end)
 
-test("a missing updatedAt counts as the oldest state", function()
-    assert(not f.ns.ImportModifiers('{"modifiers":{"Master":1}}'))
-    f.ns.ResetData()
-    assert(f.ns.ImportModifiers('{"modifiers":{"Master":1}}') and f.ns.GetModifier("Master") == 1)
-    assert(f.ns.ImportModifiers(json('{"Master":7,"ZeroMember":0}', T())))
+test("reset data lets older data be imported", function()
+    assert(f.ns.ResetData())
+    assert(f.ns.ImportModifiers('{"modifiers":{"Master":3}}') and f.ns.GetModifier("Master") == 3)
 end)
 
-test("reset data lets an old export be imported", function()
-    local oldJSON = json('{"Master":3}', T() - 50)
-    assert(not f.ns.ImportModifiers(oldJSON))
-    assert(f.ns.ResetData() and f.ns.db.sync.updatedAt == 0)
-    assert(f.ns.ImportModifiers(oldJSON) and f.ns.GetModifier("Master") == 3)
-    assert(f.ns.db.sync.updatedAt == T() - 50)
-    assert(f.ns.ImportModifiers(json('{"Master":7,"ZeroMember":0}', T())))
-end)
-
-test("export window shows the JSON and is copy-only", function()
+test("export shows copy-only JSON that round-trips through import", function()
+    f.ns.db.modifiers, f.ns.db.sync.updatedAt = { Master = 7 }, T()
     f.ns.ExportModifiers()
-    exportFrame = f.frames.RolloverExportFrame
-    local exported = '{"modifiers":{"Master":7,"ZeroMember":0},"updatedAt":' .. f.ns.db.sync.updatedAt .. '}'
-    assert(exportFrame:IsShown() and exportFrame.title == f.ns.L.EXPORT_TITLE)
-    assert(exportFrame.edit:GetText() == exported and exportFrame.edit.focused)
-    exportFrame.edit:SetText("tampered")
-    exportFrame.edit.scripts.OnTextChanged(exportFrame.edit, true)
-    assert(exportFrame.edit:GetText() == exported)
+    local window = f.frames.RolloverExportFrame
+    local exported = '{"modifiers":{"Master":7},"updatedAt":' .. T() .. '}'
+    assert(window:IsShown() and window.edit:GetText() == exported)
+    window.edit:SetText("tampered")
+    window.edit.scripts.OnTextChanged(window.edit, true)
+    assert(window.edit:GetText() == exported)
+    f.ns.db.modifiers = {}
+    assert(f.ns.ImportModifiers(exported) and f.ns.GetModifier("Master") == 7)
 end)
 
-test("export carries updatedAt (0 when unknown) and round-trips through import", function()
-    local saved, stamp = f.ns.db.modifiers, f.ns.db.sync.updatedAt
-    f.ns.db.modifiers, f.ns.db.sync.updatedAt = {}, nil
-    f.ns.ExportModifiers()
-    assert(exportFrame.edit:GetText() == '{"modifiers":{},"updatedAt":0}')
-    f.ns.db.modifiers, f.ns.db.sync.updatedAt = saved, stamp
-    f.ns.ExportModifiers()
-    local text = exportFrame.edit:GetText()
-    assert(f.ns.ImportModifiers(text) and f.ns.GetModifier("Master") == 7)
-end)
-
-test("import window keeps invalid text open and closes after success", function()
-    assert(not f.frames.RolloverImportFrame)
+test("import window stays open on invalid text and closes after success", function()
     f.ns.ShowImportFrame()
-    importFrame = f.frames.RolloverImportFrame
-    assert(importFrame:IsShown() and importFrame.title == f.ns.L.IMPORT_TITLE)
-    assert(importFrame.edit:GetText() == "" and importFrame.edit.focused)
-    importFrame.edit:SetText("{bad}")
+    local window = f.frames.RolloverImportFrame
     local importButton
     for _, button in ipairs(f.frames) do
         if button.text == f.ns.L.IMPORT_BUTTON then importButton = button end
     end
+    window.edit:SetText("{bad}")
     importButton.scripts.OnClick()
-    assert(importFrame:IsShown() and f.ns.GetModifier("Master") == 7)
-    importFrame.edit:SetText(json("{}", f.ns.db.sync.updatedAt))
+    assert(window:IsShown() and f.ns.GetModifier("Master") == 7)
+    window.edit:SetText(json("{}", f.ns.GetUpdatedAt()))
     importButton.scripts.OnClick()
-    assert(next(f.ns.db.modifiers) == nil and not importFrame:IsShown())
+    assert(next(f.ns.db.modifiers) == nil and not window:IsShown())
     f.ns.ShowImportFrame()
-    assert(importFrame.edit:GetText() == "")
-    importFrame:Hide()
+    assert(window.edit:GetText() == "", "reopening clears the text")
 end)
 
 test("debug window toggles", function()
@@ -128,22 +95,12 @@ test("debug window toggles", function()
     assert(not f.frames.RolloverDebugFrame:IsShown())
 end)
 
-test("missing JSON API is handled without errors", function()
+test("a missing JSON API is reported instead of erroring", function()
     local noAPI = client("NoAPI")
     noAPI.env.C_EncodingUtil = nil
     noAPI.roster = { "NoAPI" }
     assert(noAPI.ns.SelectMaster("NoAPI"))
-    assert(not noAPI.ns.ImportModifiers(json("{}", T())))
+    assert(not noAPI.ns.ImportModifiers(json("{}", T())) and     last(noAPI):find(noAPI.ns.L.JSON_UNAVAILABLE, 1, true))
     noAPI.ns.ExportModifiers()
-end)
-
-test("realm-less 'First Last' names export and import", function()
-    local rp = client("Andriod En")
-    rp.roster = { "Andriod En", "Other Player", "Third Guy" }
-    assert(rp.ns.SelectMaster("Andriod En") and rp.ns.SetModifier("Andriod En", 220) and rp.ns.SetModifier("Other Player", -3))
-    rp.ns.ExportModifiers()
-    assert(rp.frames.RolloverExportFrame.edit:GetText():find('"Andriod En":220', 1, true))
-    advance(5) -- edits may push the stamp up to a few seconds past the server clock
-    assert(rp.ns.ImportModifiers(json('{"Andriod En":220}', rp.ns.db.sync.updatedAt)) and rp.ns.GetModifier("Other Player") == 0)
-    for _, line in ipairs(rp.prints) do assert(not line:find("unambiguous", 1, true), line) end
+    assert(last(noAPI):find(noAPI.ns.L.JSON_UNAVAILABLE, 1, true))
 end)

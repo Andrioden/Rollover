@@ -1,189 +1,108 @@
 -- Run with a standalone Lua interpreter: lua Tests\DBTests.lua <addon directory>
--- Covers Core\DB.lua: modifiers, backups, master selection, edit permissions and guild-member names.
+-- Covers Core\DB.lua: edit permissions, updatedAt, backups, restore, reset and guild-member names.
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
 local harness = require("Tests.MockClient").new(root)
-local advance, client, last = harness.advance, harness.client, harness.last
+local client, last, backupCount = harness.client, harness.last, harness.backupCount
 local test = harness.suite("Core\\DB.lua")
 
-local p, f = client("Master"), client("Follower")
+local p, f, none = client("Master"), client("Follower"), client("Nobody")
+assert(p.ns.SelectMaster("Master") and f.ns.SelectMaster("Master"))
 
-test("modifiers reject non-finite values", function()
-    assert(not p.ns.SetModifier("Master", 12.5), "no master selected: read-only")
-    assert(last(p):find(p.ns.L.READ_ONLY, 1, true))
-    assert(p.ns.SelectMaster("Master") and last(p):find(p.ns.L.LOCAL_MASTER, 1, true))
-    assert(p.ns.SetModifier("Master", 12.5))
-    assert(p.ns.SetModifier("FormerMember", -4))
-    assert(not p.ns.SetModifier("Master", math.huge))
-    assert(p.ns.GetModifier("Master") == 12.5)
+test("only the master edits, and only with finite numbers", function()
+    assert(not none.ns.SetModifier("Master", 1) and last(none):find(none.ns.L.READ_ONLY, 1, true), "no master")
+    assert(not f.ns.SetModifier("Follower", 1), "follower")
+    assert(p.ns.SetModifier("Master", 12.5) and p.ns.SetModifier("FormerMember", -4))
+    assert(not p.ns.SetModifier("Master", math.huge) and not p.ns.SetModifier("Master", 0 / 0))
+    assert(p.ns.GetModifier("Master") == 12.5 and p.ns.GetPlayerModifier() == 12.5)
 end)
 
-test("a backup requires a name and keeps it", function()
-    assert(not pcall(p.ns.SaveBackup) and not pcall(p.ns.SaveBackup, ""))
-    local key = p.ns.SaveBackup("manual")
-    assert(p.ns.db.backups[key].name == "manual" and last(p):find("(manual)", 1, true))
-    local restored = p.ns.db.backups[key].updatedAt
-    assert(p.ns.RestoreBackup(key) and restored)
-    local names = {}
-    for _, backup in pairs(p.ns.db.backups) do names[backup.name] = true end
-    assert(names.restore, "restoring names the pre-restore backup")
-end)
-
-test("backups are independent copies and restorable", function()
-    local backup1, backup2 = p.ns.SaveBackup("manual"), p.ns.SaveBackup("manual")
-    assert(backup1 ~= backup2)
-    local stamp = p.ns.GetUpdatedAt()
-    assert(p.ns.db.backups[backup1].updatedAt == stamp and p.ns.db.backups[backup1].modifiers.Master == 12.5)
-    p.ns.db.modifiers.Master = 22
-    assert(p.ns.db.backups[backup1].modifiers.Master == 12.5)
-    assert(p.ns.RestoreBackup(backup1) and p.ns.GetPlayerModifier() == 12.5, "a backup as new as the data restores")
-    assert(p.ns.GetUpdatedAt() == stamp)
-end)
-
-test("master can edit locally without announcing", function()
-    assert(p.ns.IsMaster())
-    local printsBeforeEdit = #p.prints
-    assert(p.ns.SetModifier("Master", 12.5) and #p.prints == printsBeforeEdit)
-    assert(p.ns.GetSyncStatus == nil and p.ns.RefreshSyncControls == nil and p.ns.OnModifierStateChanged == nil)
-end)
-
-test("follower cannot edit modifiers", function()
-    assert(f.ns.SelectMaster("Master"))
-    assert(last(f):find(string.format(f.ns.L.MASTER_OFFLINE, "Master"), 1, true))
-    for _, line in ipairs(f.prints) do assert(not line:find(f.ns.L.LOCAL_MASTER, 1, true)) end
-    assert(not f.ns.SetModifier("Follower", 99))
-end)
-
-test("only real edits bump updatedAt; restore and import keep the age of their data", function()
-    local stamp = p.ns.db.sync.updatedAt
-    assert(stamp)
-    assert(p.ns.SetModifier("Master", 12.5) and p.ns.db.sync.updatedAt == stamp)
-    assert(p.ns.SetModifier("Master", 13) and p.ns.db.sync.updatedAt > stamp)
-    stamp = p.ns.db.sync.updatedAt
-    assert(p.ns.SetModifier("Master", 14) and p.ns.db.sync.updatedAt > stamp) -- same server second
-    stamp = p.ns.db.sync.updatedAt
-    assert(p.ns.RestoreBackup(p.ns.SaveBackup("manual")) and p.ns.db.sync.updatedAt == stamp)
-    advance(10) -- rapid test edits pushed the stamp past the server clock; imports may not be from the future
-    local json = '{"updatedAt":' .. stamp .. ',"modifiers":{"Master":7,"ZeroMember":0}}'
-    assert(p.ns.ImportModifiers(json) and p.ns.db.sync.updatedAt == stamp)
-    json = '{"updatedAt":' .. (stamp + 1) .. ',"modifiers":{"Master":8}}'
-    assert(p.ns.ImportModifiers(json) and p.ns.db.sync.updatedAt == stamp + 1, "an import brings its own age")
-end)
-
-test("restoring an older backup is blocked until the data is reset", function()
-    local target = p.ns.SaveBackup("manual")
-    local old = p.ns.GetUpdatedAt()
-    assert(p.ns.SetModifier("Master", 41) and p.ns.GetUpdatedAt() > old)
-    local backups, stamp = 0, p.ns.GetUpdatedAt()
-    for _ in pairs(p.ns.db.backups) do backups = backups + 1 end
-    assert(not p.ns.RestoreBackup(target) and last(p):find("Restore blocked", 1, true))
-    local after = 0
-    for _ in pairs(p.ns.db.backups) do after = after + 1 end
-    assert(p.ns.GetModifier("Master") == 41 and p.ns.GetUpdatedAt() == stamp and after == backups)
-    assert(p.ns.ResetData() and p.ns.RestoreBackup(target))
-    assert(p.ns.GetModifier("Master") == 8 and p.ns.GetUpdatedAt() == old, "the backup brings its own age")
-end)
-
-test("legacy or malformed backups are refused", function()
-    p.ns.db.backups["legacy"] = { Master = 1 }
-    assert(not p.ns.RestoreBackup("legacy") and last(p):find("unknown format", 1, true))
-    p.ns.db.backups["legacy"] = nil
-end)
-
-test("restoring a backup saves the current state as a new backup first", function()
-    assert(p.ns.SetModifier("Master", 31))
-    local before = {}
-    for key in pairs(p.ns.db.backups) do before[key] = true end
-    local target = p.ns.SaveBackup("manual")
-    p.ns.db.modifiers.Master = 32 -- same age, different content
-    assert(p.ns.RestoreBackup(target))
-    local added
-    for key, backup in pairs(p.ns.db.backups) do
-        if not before[key] and key ~= target and backup.modifiers.Master == 32 then added = key end
+test("only the master imports or restores", function()
+    for _, c in ipairs({ f, none }) do
+        local backup = c.ns.SaveBackup("manual")
+        assert(not c.ns.ImportModifiers("{}") and last(c):find(c.ns.L.FOLLOWER_LOCKED, 1, true))
+        assert(not c.ns.RestoreBackup(backup) and last(c):find(c.ns.L.FOLLOWER_LOCKED, 1, true))
     end
-    assert(added and p.ns.GetModifier("Master") == 31, "the pre-restore state must be kept")
 end)
 
-test("reset data blanks everything, backs it up and marks the data oldest", function()
-    local own = client("Resetter")
-    own.roster = { "Resetter", "Master" }
-    assert(own.ns.SelectMaster("Resetter") and own.ns.SetModifier("Master", 8))
-    local backups = 0
-    for _ in pairs(own.ns.db.backups) do backups = backups + 1 end
-    assert(own.ns.ResetData())
-    local after = 0
-    for _, backup in pairs(own.ns.db.backups) do after = after + 1; assert(backup.modifiers.Master == 8) end
-    assert(after == backups + 1 and next(own.ns.db.modifiers) == nil and own.ns.db.sync.updatedAt == 0)
-    assert(own.ns.ResetData() and #own.prints > 0)
-    local again = 0
-    for _ in pairs(own.ns.db.backups) do again = again + 1 end
-    assert(again == after, "an empty state is not backed up")
-end)
-
-test("reset data works for followers", function()
-    f.ns.db.modifiers = { Master = 3 }
-    f.ns.db.sync.updatedAt = 12345
-    assert(f.ns.ResetData() and next(f.ns.db.modifiers) == nil and f.ns.db.sync.updatedAt == 0)
-    assert(f.ns.db.sync.master == "Master", "reset keeps the selected master")
+test("only real edits bump updatedAt, strictly increasing", function()
+    local stamp = p.ns.GetUpdatedAt()
+    assert(stamp > 0)
+    assert(p.ns.SetModifier("Master", 12.5) and p.ns.GetUpdatedAt() == stamp, "unchanged value")
+    assert(p.ns.SetModifier("Master", 13) and p.ns.GetUpdatedAt() > stamp)
+    stamp = p.ns.GetUpdatedAt()
+    assert(p.ns.SetModifier("Master", 12.5) and p.ns.GetUpdatedAt() > stamp, "same server second")
 end)
 
 test("selecting a master never changes the age of the data", function()
-    local own = client("Solo")
-    own.roster = { "Solo", "Master" }
-    assert(own.ns.db.sync.updatedAt == nil and own.ns.GetUpdatedAt() == 0)
-    assert(own.ns.SelectMaster("Solo") and own.ns.db.sync.updatedAt == nil, "becoming master is not an edit")
-    assert(own.ns.SetModifier("Master", 2) and own.ns.db.sync.updatedAt > 0)
-    own.ns.db.sync.updatedAt = 42
-    assert(own.ns.SelectMaster("Master") and own.ns.db.sync.updatedAt == 42)
-    assert(own.ns.SelectMaster("Solo") and own.ns.db.sync.updatedAt == 42)
+    local solo = client("Solo")
+    solo.roster = { "Solo", "Master" }
+    solo.ns.db.sync.updatedAt = 42
+    assert(solo.ns.SelectMaster("Solo") and solo.ns.GetUpdatedAt() == 42)
+    assert(solo.ns.SelectMaster("Master") and solo.ns.GetUpdatedAt() == 42)
 end)
 
-test("followers cannot import or restore", function()
-    local backup = f.ns.SaveBackup("manual")
-    assert(not f.ns.ImportModifiers("{}") and last(f):find(f.ns.L.FOLLOWER_LOCKED, 1, true))
-    assert(not f.ns.RestoreBackup(backup) and last(f):find(f.ns.L.FOLLOWER_LOCKED, 1, true))
+test("backups are named copies with unique keys", function()
+    local a, b = p.ns.SaveBackup("manual"), p.ns.SaveBackup("manual")
+    local backup = p.ns.db.backups[a]
+    assert(a ~= b and backup.name == "manual" and backup.updatedAt == p.ns.GetUpdatedAt())
+    p.ns.db.modifiers.Master = 22
+    assert(backup.modifiers.Master == 12.5)
+    p.ns.db.modifiers.Master = 12.5
 end)
 
-test("without a master nobody can edit, import or restore", function()
-    local none = client("Nobody")
-    none.roster = { "Nobody", "Master" }
-    local backup = none.ns.SaveBackup("manual")
-    assert(not none.ns.CanEditModifiers() and not none.ns.SetModifier("Master", 1))
-    assert(not none.ns.ImportModifiers("{}") and last(none):find(none.ns.L.FOLLOWER_LOCKED, 1, true))
-    assert(not none.ns.RestoreBackup(backup))
+test("restore backs up the current state and brings the backup's age", function()
+    local target, stamp = p.ns.SaveBackup("manual"), p.ns.GetUpdatedAt()
+    p.ns.db.modifiers.Master = 32 -- same age, different content
+    local backups = backupCount(p)
+    assert(p.ns.RestoreBackup(target) and p.ns.GetModifier("Master") == 12.5 and p.ns.GetUpdatedAt() == stamp)
+    assert(backupCount(p) == backups + 1)
+    for _, backup in pairs(p.ns.db.backups) do
+        if backup.name == "restore" then assert(backup.modifiers.Master == 32) end
+    end
+end)
+
+test("restoring an older backup is blocked until the data is reset", function()
+    local target, old = p.ns.SaveBackup("manual"), p.ns.GetUpdatedAt()
+    assert(p.ns.SetModifier("Master", 41))
+    local backups = backupCount(p)
+    assert(not p.ns.RestoreBackup(target) and last(p):find("Restore blocked", 1, true))
+    assert(p.ns.GetModifier("Master") == 41 and backupCount(p) == backups)
+    assert(p.ns.ResetData() and p.ns.RestoreBackup(target))
+    assert(p.ns.GetModifier("Master") == 12.5 and p.ns.GetUpdatedAt() == old)
+end)
+
+test("reset backs up non-empty data, clears it and marks it oldest, also for followers", function()
+    f.ns.db.modifiers, f.ns.db.sync.updatedAt = { Master = 3 }, 12345
+    local backups = backupCount(f)
+    assert(f.ns.ResetData() and next(f.ns.db.modifiers) == nil and f.ns.GetUpdatedAt() == 0)
+    assert(backupCount(f) == backups + 1 and f.ns.db.sync.master == "Master")
+    assert(f.ns.ResetData() and backupCount(f) == backups + 1, "an empty state is not backed up")
 end)
 
 test("only automatic backups are pruned, keeping the newest ones", function()
     local seconds = 0
     p.env.date = function() seconds = seconds + 1; return string.format("2026-10-04 12:00:%02d", seconds) end
-    local manual = p.ns.SaveBackup("manual")
-    local first = p.ns.SaveBackup("auto sync")
+    local manual, oldest = p.ns.SaveBackup("manual"), p.ns.SaveBackup("auto sync")
     for _ = 1, p.ns.MAX_AUTO_BACKUPS do p.ns.SaveBackup("auto sync") end
-    local autoCount = 0
-    for key in pairs(p.ns.db.backups) do if p.ns.db.backups[key].name == "auto sync" then autoCount = autoCount + 1 end end
-    assert(autoCount == p.ns.MAX_AUTO_BACKUPS)
-    assert(p.ns.db.backups[manual] and not p.ns.db.backups[first])
-end)
-
-test("modifier state is limited to ns.MAX_MEMBERS entries", function()
-    local large = {}
-    for i = 1, 1001 do large["Member" .. i] = 0 end
-    assert(not f.ns.ValidateModifierState(large))
-    large.Member1001 = nil
-    assert(f.ns.ValidateModifierState(large))
+    local auto = 0
+    for _, backup in pairs(p.ns.db.backups) do if backup.name == "auto sync" then auto = auto + 1 end end
+    assert(auto == p.ns.MAX_AUTO_BACKUPS and p.ns.db.backups[manual] and not p.ns.db.backups[oldest])
 end)
 
 test("member names are resolved against the roster", function()
     f.roster = { "Twin-One", "Twin-Two", "Twin" }
-    assert(f.ns.ResolveGuildMember("Twin") == "Twin") -- an exact match beats ambiguous short names
+    assert(f.ns.ResolveGuildMember("Twin") == "Twin", "an exact match beats ambiguous short names")
     f.roster = { "Twin-One", "Twin-Two" }
     assert(not f.ns.ResolveGuildMember("Twin"))
     f.roster = { "Solo Player" }
-    assert(f.ns.ResolveGuildMember("Solo Player-Realm") == "Solo Player") -- sender with a realm suffix
+    assert(f.ns.ResolveGuildMember("Solo Player-Realm") == "Solo Player", "sender with a realm suffix")
     assert(not f.ns.ResolveGuildMember("Other Player"))
 end)
 
-test("realm-less 'First Last' names are valid", function()
-    assert(f.ns.IsValidMemberName("Andriod En") and not f.ns.IsValidMemberName(""))
-    assert(not f.ns.IsValidMemberName("bad|name"))
+test("realm-less 'First Last' names are valid; empty, overlong and escape names are not", function()
+    assert(f.ns.IsValidMemberName("Andriod En"))
+    for _, name in ipairs({ "", string.rep("a", 97), "bad|name", "tab\tname" }) do
+        assert(not f.ns.IsValidMemberName(name), name)
+    end
 end)

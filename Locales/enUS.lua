@@ -10,7 +10,6 @@ ns.L = {
     BACKUP_SAVED = "Backup saved: %s (%s)",
     BACKUP_RESTORED = "Backup restored: %s",
     BACKUP_MISSING = "That backup no longer exists.",
-    BACKUP_INVALID = "That backup has an unknown format and cannot be restored.",
     RESTORE_OLDER = "Restore blocked: backup %s is from %s, older than your current modifiers (%s). Use Tools > Reset data first if you really want it.",
     EXPORT_TITLE = "Rollover | Modifiers JSON (Ctrl+C to copy)",
     IMPORT_TITLE = "Rollover | Import modifiers JSON (replaces current state)",

@@ -4,11 +4,10 @@ local frame
 
 local NAME_WIDTH, CLASS_WIDTH, RANK_WIDTH, MOD_WIDTH = 170, 90, 110, 60
 local MASTER_SIZE, MASTER_GAP = 16, 2
-local CLASS_OFFSET = MASTER_GAP
 local ROW_HEIGHT = 22
--- Row content is 468 wide (+44 for margins and scrollbar); the defaults keep a little slack.
-local FRAME_WIDTH, FRAME_HEIGHT = 520, 400
-local MIN_WIDTH, MIN_HEIGHT = 512, 250
+-- Row content (column widths plus gaps), then the left margin and the right margin with scrollbar.
+local ROW_WIDTH = 4 + MASTER_SIZE + MASTER_GAP + NAME_WIDTH + MASTER_GAP + CLASS_WIDTH + 4 + RANK_WIDTH + 10 + MOD_WIDTH
+local MIN_WIDTH, MIN_HEIGHT = 14 + ROW_WIDTH + 30, 250
 local MAX_WIDTH, MAX_HEIGHT = 900, 1500
 
 local sortKey, sortAscending = "rank", true
@@ -42,7 +41,7 @@ local function InitRow(row, data)
 
         -- Class column.
         row.classText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        row.classText:SetPoint("LEFT", row.nameText, "RIGHT", CLASS_OFFSET, 0)
+        row.classText:SetPoint("LEFT", row.nameText, "RIGHT", MASTER_GAP, 0)
         row.classText:SetWidth(CLASS_WIDTH)
         row.classText:SetJustifyH("LEFT")
 
@@ -75,8 +74,7 @@ local function InitRow(row, data)
         row.modEdit = edit
     end
 
-    local member = data.member
-    local color = member.class and RAID_CLASS_COLORS[member.class]
+    local color = data.class and RAID_CLASS_COLORS[data.class]
     local shortName = Ambiguate(data.name, "short")
 
     row.key = data.name
@@ -85,9 +83,9 @@ local function InitRow(row, data)
     row.masterButton.icon:SetAlpha(row.isMaster and 1 or 0.35)
     row.masterButton:SetEnabled(not ns.IsSyncPending())
     row.nameText:SetText(color and color:WrapTextInColorCode(shortName) or shortName)
-    row.classText:SetText(member.class and LOCALIZED_CLASS_NAMES_MALE[member.class] or "")
-    row.rankText:SetText(member.rank or "")
-    row.modEdit:SetText(tostring(member.modifier or 0))
+    row.classText:SetText(data.class and LOCALIZED_CLASS_NAMES_MALE[data.class] or "")
+    row.rankText:SetText(data.rank or "")
+    row.modEdit:SetText(tostring(data.modifier))
     row.modEdit:SetCursorPosition(0)
     row.modEdit:SetEnabled(ns.CanEditModifiers())
 end
@@ -103,15 +101,15 @@ local function UpdateHeaderLabels()
 end
 
 function ns.RefreshRoster()
-    if not frame or not frame:IsShown() or not ns.db then return end
+    if not frame or not frame:IsShown() then return end
 
     local list = ns.GetRosterList(sortKey, sortAscending)
     frame.scrollBox:SetDataProvider(CreateDataProvider(list), ScrollBoxConstants.RetainScrollPosition)
 
-    if #list == 0 then
-        frame.emptyText:SetText(IsInGuild() and ns.L.LOADING_ROSTER or ns.L.NOT_IN_GUILD)
-    else
+    if #list > 0 then
         frame.emptyText:SetText("")
+    else
+        frame.emptyText:SetText(IsInGuild() and ns.L.LOADING_ROSTER or ns.L.NOT_IN_GUILD)
     end
 end
 
@@ -151,8 +149,8 @@ local function ShowTools(button)
         else
             restore:SetScrollMode(300)
             for _, key in ipairs(keys) do
-                local name = ns.db.backups[key].name
-                restore:CreateButton(name and (key .. " (" .. name .. ")") or key, function() ns.RestoreBackup(key) end)
+                local label = key .. " (" .. ns.db.backups[key].name .. ")"
+                restore:CreateButton(label, function() ns.RestoreBackup(key) end)
             end
         end
         root:CreateDivider()
@@ -184,25 +182,10 @@ local function CreateHeader(parent, key, text, width, justify)
 end
 
 local function CreateMainFrame()
-    frame = CreateFrame("Frame", "RolloverMainFrame", UIParent, "BasicFrameTemplateWithInset")
-    frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
-    frame:SetPoint("CENTER")
+    frame = ns.CreateWindow("RolloverMainFrame", "Rollover " .. ns.version, 520, 400)
+    frame:SetFrameStrata("HIGH")
     frame:SetResizable(true)
     frame:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
-    frame:SetFrameStrata("HIGH")
-    frame:SetClampedToScreen(true)
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-
-    local title = "Rollover " .. ns.version
-    if frame.SetTitle then
-        frame:SetTitle(title)
-    else
-        frame.TitleText:SetText(title)
-    end
 
     local tools = CreateFrame("Button", nil, frame)
     tools:SetSize(24, 24)
@@ -227,7 +210,7 @@ local function CreateMainFrame()
     local nameHeader = CreateHeader(header, "name", "Name", NAME_WIDTH, "LEFT")
     nameHeader:SetPoint("LEFT", 4 + MASTER_SIZE + MASTER_GAP, 0)
     local classHeader = CreateHeader(header, "class", "Class", CLASS_WIDTH, "LEFT")
-    classHeader:SetPoint("LEFT", nameHeader, "RIGHT", CLASS_OFFSET, 0)
+    classHeader:SetPoint("LEFT", nameHeader, "RIGHT", MASTER_GAP, 0)
     local rankHeader = CreateHeader(header, "rank", "Rank", RANK_WIDTH, "LEFT")
     rankHeader:SetPoint("LEFT", classHeader, "RIGHT", 4, 0)
     local modHeader = CreateHeader(header, "modifier", "Modifier", MOD_WIDTH + 20, "CENTER")
@@ -266,10 +249,6 @@ local function CreateMainFrame()
         ns.RequestGuildRoster()
         ns.RefreshRoster()
     end)
-
-    -- Lets Escape close the window.
-    tinsert(UISpecialFrames, "RolloverMainFrame")
-    frame:Hide()
 end
 
 function ns.ToggleMainFrame()

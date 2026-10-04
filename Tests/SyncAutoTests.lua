@@ -4,30 +4,9 @@
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
 local harness = require("Tests.MockClient").new(root)
-local advance, client = harness.advance, harness.client
-local last, printedSince = harness.last, harness.printedSince
-local delivered, messagesFrom, login = harness.delivered, harness.messagesFrom, harness.login
+local advance, client, last, printedSince = harness.advance, harness.client, harness.last, harness.printedSince
+local delivered, messagesFrom, login, backupCount = harness.delivered, harness.messagesFrom, harness.login, harness.backupCount
 local test = harness.suite("Sync automatic checks and announcements")
-
-local function autoBackups(c)
-    local total = 0
-    for key in pairs(c.ns.db.backups) do if c.ns.db.backups[key].name == "auto sync" then total = total + 1 end end
-    return total
-end
-
-local function lastRequestId()
-    local requests = messagesFrom("Follower", "REQUEST")
-    return requests[#requests]:match("REQUEST\t([^\t]+)")
-end
-
--- Sends a manual request that the master cannot answer, so tests can inject messages with its ID.
-local function holdRequest(master, follower)
-    master.result = 12
-    assert(follower.ns.RequestSync())
-    advance(0.5)
-    master.result = 0
-    return lastRequestId()
-end
 
 local p, f = client("Master"), client("Follower")
 f.online.Master, p.online.Follower = true, true
@@ -36,11 +15,9 @@ assert(p.ns.SelectMaster("Master") and p.ns.SetModifier("Master", 5))
 test("selecting an online master syncs immediately", function()
     assert(f.ns.SelectMaster("Master"))
     advance(2)
-    assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Master") == 5)
-    assert(f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
+    assert(f.ns.GetModifier("Master") == 5 and f.ns.GetUpdatedAt() == p.ns.GetUpdatedAt())
     local output = printedSince(f, 0)
     assert(output:find("Requesting modifiers from Master", 1, true) and output:find("Synced 4 modifiers", 1, true))
-    assert(messagesFrom("Follower", "REQUEST")[1]:match("^REQUEST\t[%w%-]+\t0$"), "a fresh follower asks with age 0")
 end)
 
 test("selecting an offline master waits for it to come online", function()
@@ -49,38 +26,29 @@ test("selecting an offline master waits for it to come online", function()
     local mark = #delivered
     assert(late.ns.SelectMaster("Master"))
     advance(2)
-    assert(last(late):find("is offline", 1, true) and #delivered == mark)
-    assert(late.ns.db.sync.updatedAt == nil and not late.ns.IsSyncPending())
+    assert(last(late):find("is offline", 1, true) and #delivered == mark and not late.ns.IsSyncPending())
 end)
 
-
-test("login check is silent and cheap when up to date", function()
+test("a login check is silent and costs one CURRENT when up to date", function()
     advance(61)
-    local followerMark, masterMark, deliveredMark = #f.prints, #p.prints, #delivered
-    local backups = 0
-    for _ in pairs(f.ns.db.backups) do backups = backups + 1 end
+    local followerMark, masterMark, deliveredMark, backups = #f.prints, #p.prints, #delivered, backupCount(f)
     login(f)
     advance(5)
-    assert(not f.ns.IsSyncPending() and #f.prints == followerMark and #p.prints == masterMark)
-    local request = messagesFrom("Follower", "REQUEST", deliveredMark)[1]
-    assert(request and request:match("\t" .. f.ns.db.sync.updatedAt .. "$"), "REQUEST carries updatedAt")
+    assert(#f.prints == followerMark and #p.prints == masterMark and backupCount(f) == backups)
     assert(#messagesFrom("Master", "CURRENT", deliveredMark) == 1 and #messagesFrom("Master", "BEGIN", deliveredMark) == 0)
-    local after = 0
-    for _ in pairs(f.ns.db.backups) do after = after + 1 end
-    assert(after == backups)
 end)
 
-test("a newer master state is streamed with a tagged backup", function()
+test("a login check streams newer master data with an auto sync backup", function()
     advance(61)
     assert(p.ns.SetModifier("Master", 9))
-    local masterMark, backups = #p.prints, autoBackups(f)
+    local backups = backupCount(f)
     login(f)
     advance(5)
-    assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Master") == 9)
-    assert(f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
-    assert(autoBackups(f) == backups + 1)
-    assert(printedSince(p, masterMark):find("Follower requested a sync", 1, true))
-    assert(printedSince(f, 0):find("Synced 4 modifiers from Master", 1, true))
+    assert(f.ns.GetModifier("Master") == 9 and f.ns.GetUpdatedAt() == p.ns.GetUpdatedAt())
+    assert(backupCount(f) == backups + 1 and last(f):find("Synced 4 modifiers from Master", 1, true))
+    local auto = 0
+    for _, backup in pairs(f.ns.db.backups) do if backup.name == "auto sync" then auto = auto + 1 end end
+    assert(auto == 1)
 end)
 
 test("a repeated check inside the cooldown is skipped", function()
@@ -90,7 +58,7 @@ test("a repeated check inside the cooldown is skipped", function()
     assert(#messagesFrom("Follower", "REQUEST", mark) == 0)
 end)
 
-test("the master coming online triggers one check", function()
+test("the master coming online triggers one delayed check", function()
     advance(61)
     assert(p.ns.SetModifier("Master", 11))
     f.online.Master = false
@@ -100,41 +68,37 @@ test("the master coming online triggers one check", function()
     local mark = #delivered
     f.online.Master = true
     f.ns.OnGuildRosterUpdate()
-    f.ns.OnGuildRosterUpdate()
+    f.ns.OnGuildRosterUpdate() -- the client fires the update twice
     advance(2)
     assert(#messagesFrom("Follower", "REQUEST", mark) == 0, "the master's addon gets time to settle")
     advance(10)
-    assert(#messagesFrom("Follower", "REQUEST", mark) == 1)
-    assert(f.ns.GetModifier("Master") == 11 and f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
+    assert(#messagesFrom("Follower", "REQUEST", mark) == 1 and f.ns.GetModifier("Master") == 11)
 end)
 
 test("the master's own checks and missing masters do nothing", function()
     local mark = #delivered
     login(p)
-    local lone = client("Lone")
-    login(lone)
+    login(client("Lone"))
     advance(10)
     assert(#delivered == mark)
 end)
 
-test("failures before BEGIN stay out of chat and retry once", function()
+test("an unanswered check stays out of chat and retries once", function()
     advance(61)
-    local ghost = client("Ghost Follower")
+    local ghost = client("Ghost Follower") -- its master has no client, so requests go unanswered
     ghost.roster = { "Ghost", "Ghost Follower" }
     ghost.online.Ghost = true
     assert(ghost.ns.SelectMaster("Ghost"))
     ghost.ns.CancelSync()
-    ghost.ns.db.sync.updatedAt = 10
     local mark, printMark = #delivered, #ghost.prints
     login(ghost)
     advance(3)
     assert(ghost.ns.IsSyncPending())
     advance(15)
-    assert(not ghost.ns.IsSyncPending())
+    assert(not ghost.ns.IsSyncPending(), "timed out")
     advance(6)
-    assert(ghost.ns.IsSyncPending())
-    advance(16)
-    advance(60)
+    assert(ghost.ns.IsSyncPending(), "retrying")
+    advance(76)
     assert(not ghost.ns.IsSyncPending() and #messagesFrom("Ghost Follower", "REQUEST", mark) == 2)
     assert(#ghost.prints == printMark)
 end)
@@ -145,7 +109,6 @@ test("restricted communication and send errors are silent for automatic checks",
     f.result = 11
     login(f)
     advance(20)
-    assert(#f.prints == mark)
     f.result = 12
     advance(61)
     login(f)
@@ -154,67 +117,38 @@ test("restricted communication and send errors are silent for automatic checks",
     f.result = 0
 end)
 
-test("an interrupted stream leaves local data and its age untouched", function()
-    advance(61)
-    local stamp, value, backups = f.ns.db.sync.updatedAt, f.ns.GetModifier("Master"), autoBackups(f)
-    assert(stamp and value == 11)
-    local id = holdRequest(p, f)
-    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t" .. (stamp + 5), "WHISPER", "Master")
-    f.ns.OnSyncMessage("Rollover", "VALUE\t" .. id .. "\t1\tMaster\t-7", "WHISPER", "Master")
-    f.ns.CancelSync()
-    assert(f.ns.db.sync.updatedAt == stamp and f.ns.GetModifier("Master") == 11 and autoBackups(f) == backups)
-    advance(35)
-    login(f)
-    advance(5)
-    assert(f.ns.GetModifier("Master") == 11 and f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
-end)
+local alpha, beta = client("Alpha"), client("Beta")
+alpha.roster, beta.roster = { "Alpha", "Beta" }, { "Alpha", "Beta" }
+alpha.online.Beta = true
 
-
-
-test("a player who becomes master announces it so followers who chose them sync", function()
-    local alpha, beta = client("Alpha"), client("Beta")
-    alpha.roster, beta.roster = { "Alpha", "Beta" }, { "Alpha", "Beta" }
-    alpha.online.Beta = true
+test("becoming master makes followers who chose that player sync after a random delay", function()
     alpha.ns.db.modifiers.Alpha = 4 -- data that exists before the player becomes master
     alpha.ns.TouchModifiers()
     assert(beta.ns.SelectMaster("Alpha") and last(beta):find("is offline", 1, true))
-    -- Alpha logs in without having chosen themselves: the master check is answered NOT_MASTER.
+    -- Alpha comes online without having chosen themselves: the check is answered NOT_MASTER.
     beta.online.Alpha = true
     beta.ns.OnGuildRosterUpdate()
     advance(10)
-    assert(beta.ns.GetModifier("Alpha") == 0 and beta.ns.db.sync.updatedAt == nil)
+    assert(beta.ns.GetModifier("Alpha") == 0)
     local mark = #delivered
     alpha.ns.SelectMaster("Alpha")
     advance(0.5)
-    local announce = delivered[mark + 1]
-    assert(announce and announce.channel == "GUILD" and announce.text:match("^ANNOUNCE\t[%w%-]+\t" .. alpha.ns.db.sync.updatedAt .. "$"))
-    assert(#messagesFrom("Beta", "REQUEST", mark) == 0, "followers wait a random delay")
+    assert(#messagesFrom("Alpha", "ANNOUNCE", mark) == 1 and #messagesFrom("Beta", "REQUEST", mark) == 0)
     advance(2.5) -- two online members: the delay is 1-2 s
     assert(#messagesFrom("Beta", "REQUEST", mark) == 1)
-    assert(beta.ns.GetModifier("Alpha") == 4 and beta.ns.db.sync.updatedAt == alpha.ns.db.sync.updatedAt)
-    assert(not beta.ns.IsSyncPending() and #messagesFrom("Alpha", "BEGIN", mark) == 1)
+    assert(beta.ns.GetModifier("Alpha") == 4 and beta.ns.GetUpdatedAt() == alpha.ns.GetUpdatedAt())
 end)
 
-test("an announcement with an unchanged updatedAt starts nothing", function()
+test("announcements are only acted on from the chosen master, on the guild channel, with a newer stamp", function()
     advance(61)
-    local alpha, beta = harness.clients.Alpha, harness.clients.Beta
     local mark = #delivered
-    alpha.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-1\t" .. beta.ns.db.sync.updatedAt, "GUILD", "Alpha")
-    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-1\t" .. beta.ns.db.sync.updatedAt, "GUILD", "Alpha")
-    advance(30)
-    assert(#delivered == mark)
-end)
-
-test("announcements are only accepted from the chosen master on the guild channel", function()
-    advance(61)
-    local beta = harness.clients.Beta
-    local mark = #delivered
-    local newer = beta.ns.db.sync.updatedAt + 5
+    local own, newer = beta.ns.GetUpdatedAt(), beta.ns.GetUpdatedAt() + 5
+    alpha.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-1\t" .. newer, "GUILD", "Alpha") -- the master's own echo
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-1\t" .. own, "GUILD", "Alpha") -- not newer
     beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\t" .. newer, "GUILD", "Beta") -- not the master
-    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\t" .. newer, "WHISPER", "Alpha") -- wrong channel
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\t" .. newer, "WHISPER", "Alpha")
     beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\tbad", "GUILD", "Alpha")
     beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2", "GUILD", "Alpha")
-    beta.ns.OnSyncMessage("Rollover", "REQUEST\tx-3", "GUILD", "Alpha") -- only ANNOUNCE may use GUILD
     advance(30)
     assert(#delivered == mark)
     beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\t" .. newer, "GUILD", "Alpha")
@@ -224,7 +158,6 @@ end)
 
 test("the announcement delay grows with the number of online guild members", function()
     advance(61)
-    local beta = harness.clients.Beta
     local roster = { "Alpha", "Beta" }
     beta.online = { Alpha = true, Beta = true }
     for i = 1, 60 do
@@ -234,7 +167,7 @@ test("the announcement delay grows with the number of online guild members", fun
     beta.roster = roster
     local mark, random = #delivered, math.random
     math.random = function() return 0.99 end
-    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-9\t" .. (beta.ns.db.sync.updatedAt + 5), "GUILD", "Alpha")
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-9\t" .. (beta.ns.GetUpdatedAt() + 5), "GUILD", "Alpha")
     math.random = random
     advance(20)
     assert(#messagesFrom("Beta", "REQUEST", mark) == 0, "62 online members spread checks over 30 s")

@@ -12,18 +12,10 @@ local rollPattern = "^" .. RANDOM_ROLL_RESULT
     :gsub("%%s", "(.+)")
     :gsub("%%d", "(%%d+)") .. "$"
 
-local function FormatModifier(value)
-    return value >= 0 and ("+" .. value) or tostring(value)
-end
-
 local function ClearPending()
     pending = nil
     frame.events:UnregisterEvent("CHAT_MSG_SYSTEM")
     frame.rollButton:Enable()
-end
-
-local function UpdateRollButton()
-    frame.rollButton:SetText("Roll (" .. FormatModifier(ns.GetPlayerModifier()) .. ")")
 end
 
 local function OnRollResult(text)
@@ -62,23 +54,8 @@ local function StartRoll()
 end
 
 local function CreateRollFrame()
-    frame = CreateFrame("Frame", "RolloverRollFrame", UIParent, "BasicFrameTemplateWithInset")
-    frame:SetSize(320, 150)
+    frame = ns.CreateWindow("RolloverRollFrame", "Rollover | Roll for item", 320, 150)
     frame:SetPoint("CENTER", 0, 150)
-    frame:SetFrameStrata("DIALOG")
-    frame:SetClampedToScreen(true)
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-
-    local title = "Rollover | Roll for item"
-    if frame.SetTitle then
-        frame:SetTitle(title)
-    else
-        frame.TitleText:SetText(title)
-    end
 
     local icon = CreateFrame("Button", nil, frame)
     icon:SetSize(44, 44)
@@ -117,9 +94,6 @@ local function CreateRollFrame()
     frame.events:SetScript("OnEvent", function(_, _, text) OnRollResult(text) end)
 
     frame:SetScript("OnHide", ClearPending)
-
-    tinsert(UISpecialFrames, "RolloverRollFrame")
-    frame:Hide()
 end
 
 function ns.ShowRollFrame(link)
@@ -129,7 +103,8 @@ function ns.ShowRollFrame(link)
     frame.link = link
     frame.nameText:SetText(link)
     frame.icon.texture:SetTexture(select(5, C_Item.GetItemInfoInstant(link)))
-    UpdateRollButton()
+    local modifier = ns.GetPlayerModifier()
+    frame.rollButton:SetText(format("Roll (%s%s)", modifier >= 0 and "+" or "", modifier))
     frame:Show()
 end
 

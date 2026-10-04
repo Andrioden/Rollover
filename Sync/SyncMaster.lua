@@ -38,18 +38,16 @@ local function ValueMessages(id, names, modifiers)
 end
 
 local function Respond(sender, id, have)
-    -- An up-to-date follower costs one tiny reply, is not rate limited and is not announced.
-    if ns.IsMaster() then
-        if have == ns.GetUpdatedAt() then
-            if Sync.QueueLength() >= 2 then ns.Debug("Dropped CURRENT reply: send queue is busy"); return end
-            ns.Debug(sender .. " is up to date")
-            Enqueue({ target = sender, current = ns.IsMaster, messages = { Message("CURRENT", id) } })
-            return
-        end
-    end
     -- Declined before the rate limit, so a follower is not locked out right after this player
     -- becomes master (see ns.AnnounceMaster).
     if not ns.IsMaster() then SendError(sender, id, "NOT_MASTER"); return end
+    -- An up-to-date follower costs one tiny reply, is not rate limited and is not announced.
+    if have == ns.GetUpdatedAt() then
+        if Sync.QueueLength() >= 2 then ns.Debug("Dropped CURRENT reply: send queue is busy"); return end
+        ns.Debug(sender .. " is up to date")
+        Enqueue({ target = sender, current = ns.IsMaster, messages = { Message("CURRENT", id) } })
+        return
+    end
     local now = GetTime()
     if recentRequests[sender] and now - recentRequests[sender] < 30 then
         SendError(sender, id, "BUSY")
@@ -57,14 +55,15 @@ local function Respond(sender, id, have)
     end
     recentRequests[sender] = now
     if Sync.QueueLength() >= 2 then SendError(sender, id, "BUSY"); return end
+    -- Current roster members without saved data are sent as explicit zeros.
     local modifiers = CopyTable(ns.db.modifiers)
     for _, entry in ipairs(ns.GetRosterList("name", true)) do
         if modifiers[entry.name] == nil then modifiers[entry.name] = 0 end
     end
-    local valid = ns.ValidateModifierState(modifiers)
-    if not valid then SendError(sender, id, "INVALID_TRANSFER"); return end
     local names = {}
     for name in pairs(modifiers) do names[#names + 1] = name end
+    -- Retained absent members plus the roster can exceed what a follower accepts.
+    if #names > ns.MAX_MEMBERS then SendError(sender, id, "INVALID_TRANSFER"); return end
     table.sort(names)
     local messages = { Message("BEGIN", id, #names, ns.GetUpdatedAt()) }
     for _, message in ipairs(ValueMessages(id, names, modifiers)) do messages[#messages + 1] = message end
@@ -74,14 +73,8 @@ local function Respond(sender, id, have)
     end
 end
 
--- REQUEST [have]: `have` is the requester's updatedAt, so an up-to-date follower gets CURRENT.
+-- REQUEST have: `have` is the requester's updatedAt, so an up-to-date follower gets CURRENT.
 function ns.OnSyncRequest(member, id, fields)
-    local have
-    if #fields == 3 then
-        have = Integer(fields[3], Sync.MAX_STAMP)
-        if not have then return end
-    elseif #fields ~= 2 then
-        return
-    end
-    Respond(member, id, have)
+    local have = #fields == 3 and Integer(fields[3], Sync.MAX_STAMP)
+    if have then Respond(member, id, have) end
 end

@@ -89,15 +89,12 @@ function MockClient.new(root)
         c.env = env
         env.CopyTable = copy
         env.issecretvalue = function(value) return value == secret end
-        env.strtrim = function(text) return text:match("^%s*(.-)%s*$") end
         env.date = function() return "2026-10-04 12:00:00" end
         env.GetTime = function() return clock end
         env.GetServerTime = function() return 1800000000 + math.floor(clock) end
         env.GetUnitName = function() return name end
         env.Ambiguate = function(value) return value:gsub("%-.*$", "") end
         env.IsInGuild = function() return c.guild ~= nil end
-        env.GetGuildInfo = function() return c.guild, nil, nil, "Realm" end
-        env.GetNormalizedRealmName = function() return "Realm" end
         env.GetNumGuildMembers = function() return #c.roster end
         c.roster = { "Master", "Follower", "ZeroMember", "ThirdMember" }
         c.online = {} -- [roster name] = true; members are offline unless a test says otherwise
@@ -164,22 +161,17 @@ function MockClient.new(root)
         function methods:SetText(text) self.text = text end
         function methods:GetText() return self.text end
         function methods:SetEnabled(enabled) self.enabled = not not enabled end
-        function methods:HasFocus() return self.focused end
         function methods:SetFocus() self.focused = true end
         function methods:ClearFocus() self.focused = false end
-        function methods:CreateFontString() local fontString = frame(); fontString.owner = self; return fontString end
+        function methods:CreateFontString() return frame() end
         function methods:GetFontString() return self end
         function methods:SetDataProvider(data) self.data = data end
         function methods:SetTitle(title) self.title = title end
         function methods:SetNormalTexture(path) self.normalTexture = path end
         function methods:GetPushedTexture() return frame() end
-        function methods:SetPoint(point, ...) self.point, self.pointArgs = point, { ... } end
         function methods:CreateTexture() return frame() end
         function methods:SetDesaturated(value) self.desaturated = value end
         function methods:SetAlpha(value) self.alpha = value end
-        function methods:SetSize(width, height) self.width, self.height = width, height end
-        function methods:SetResizeBounds(minWidth) self.minWidth = minWidth end
-        function methods:SetVerticalScroll(value) self.verticalScroll = value end
         env.CreateFrame = function(_, frameName) return frame(frameName) end
         env.UIParent, env.GameTooltip = frame(), frame()
         env.GameTooltip_Hide = function() end
@@ -230,6 +222,7 @@ function MockClient.new(root)
         c.load("Sync\\SyncCore.lua")
         c.load("Sync\\SyncMaster.lua")
         c.load("Sync\\SyncClient.lua")
+        c.load("UI\\Window.lua")
         c.load("UI\\DebugFrame.lua")
         c.load("UI\\TextDialog.lua")
         c.load("UI\\ExportFrame.lua")
@@ -264,14 +257,10 @@ function MockClient.new(root)
         end
     end
 
-    -- Requests a sync that always streams (updatedAt cleared, so the request asks with age 0) and returns
-    -- the request ID the addon generated (<server time>-<per-client sequence>).
-    local sequences = setmetatable({}, { __mode = "k" })
+    -- Starts a manual sync that always streams: updatedAt is cleared, so the request asks with age 0.
     local function requestSync(c)
         c.ns.db.sync.updatedAt = nil
-        if not c.ns.RequestSync() then return nil end
-        sequences[c] = (sequences[c] or 0) + 1
-        return string.format("%d-%d", c.env.GetServerTime(), sequences[c])
+        return c.ns.RequestSync()
     end
 
     -- Addon messages delivered from `name` whose type is `kind`, after delivered[mark].

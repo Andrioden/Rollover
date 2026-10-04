@@ -12,6 +12,7 @@ Core\DB.lua
 Sync\SyncCore.lua
 Sync\SyncMaster.lua
 Sync\SyncClient.lua
+UI\Window.lua
 UI\MainFrame.lua
 UI\DebugFrame.lua
 UI\TextDialog.lua

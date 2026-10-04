@@ -3,7 +3,7 @@ local addonName, ns = ...
 -- Shared sync transport: message helpers, the bounded send queue and the message router.
 -- SyncMaster.lua serves data, SyncClient.lua requests and applies it; both use ns.Sync.
 local PREFIX = "Rollover"
-local TIMEOUT, MAX_MEMBERS = 1800, ns.MAX_MEMBERS
+local TIMEOUT = 1800
 -- The server allows a burst of ~10 messages per prefix, then 1/sec; throttled sends retry.
 local SEND_INTERVAL, THROTTLE_RETRY, LOCKDOWN_RETRY = 0.2, 1, 5
 local MAX_QUEUE = 3
@@ -13,7 +13,6 @@ local sequence = 0
 
 local Sync = {
     TIMEOUT = TIMEOUT,
-    MAX_MEMBERS = MAX_MEMBERS,
     MAX_STAMP = 2 ^ 40,
     MAX_QUEUE = MAX_QUEUE,
 }
@@ -26,8 +25,7 @@ function Sync.Message(kind, id, ...)
 end
 
 function Sync.Integer(text, maximum)
-    if not text or not text:match("^%d+$") then return end
-    local value = tonumber(text)
+    local value = text and text:match("^%d+$") and tonumber(text)
     if value and value <= maximum then return value end
 end
 
@@ -114,8 +112,7 @@ end
 -- REQUEST to the master side.
 function ns.OnSyncMessage(prefix, text, channel, sender)
     if issecretvalue(prefix) or issecretvalue(text) or issecretvalue(channel) or issecretvalue(sender) then return end
-    if prefix ~= PREFIX or (channel ~= "WHISPER" and channel ~= "GUILD") or type(text) ~= "string"
-        or #text > 255 or type(sender) ~= "string" then return end
+    if prefix ~= PREFIX or (channel ~= "WHISPER" and channel ~= "GUILD") then return end
     local member = ns.ResolveGuildMember(sender)
     if not member then return end
     local fields = {}
