@@ -175,7 +175,8 @@ test("a player who becomes master announces it so followers who chose them sync"
     local alpha, beta = client("Alpha"), client("Beta")
     alpha.roster, beta.roster = { "Alpha", "Beta" }, { "Alpha", "Beta" }
     alpha.online.Beta = true
-    assert(alpha.ns.SetModifier("Alpha", 4))
+    alpha.ns.db.modifiers.Alpha = 4 -- data that exists before the player becomes master
+    alpha.ns.TouchModifiers()
     assert(beta.ns.SelectMaster("Alpha") and last(beta):find("is offline", 1, true))
     -- Alpha logs in without having chosen themselves: the master check is answered NOT_MASTER.
     beta.online.Alpha = true

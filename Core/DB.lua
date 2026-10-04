@@ -80,7 +80,7 @@ function ns.IsMaster()
 end
 
 function ns.CanEditModifiers()
-    return (not ns.db.sync.master or ns.IsMaster()) and not ns.IsSyncPending()
+    return ns.IsMaster() and not ns.IsSyncPending()
 end
 
 function ns.GetUpdatedAt()
@@ -129,10 +129,10 @@ function ns.SaveBackup(name)
     return key
 end
 
--- Followers must not diverge from their master; select yourself as master to edit locally.
+-- Only the master changes modifiers; select yourself as master to edit locally.
 function ns.CanReplaceModifiers()
     if ns.IsSyncPending() then ns.Print(ns.L.BUSY); return false end
-    if ns.db.sync.master and not ns.IsMaster() then ns.Print(ns.L.FOLLOWER_LOCKED); return false end
+    if not ns.IsMaster() then ns.Print(ns.L.FOLLOWER_LOCKED); return false end
     return true
 end
 

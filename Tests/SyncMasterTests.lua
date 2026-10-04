@@ -30,8 +30,8 @@ local function ask(c, sender, have, channel)
 end
 
 local m = client("Master")
-assert(m.ns.SetModifier("Master", 12.5) and m.ns.SetModifier("FormerMember", -4))
 assert(m.ns.SelectMaster("Master") and m.ns.IsMaster())
+assert(m.ns.SetModifier("Master", 12.5) and m.ns.SetModifier("FormerMember", -4))
 advance(1) -- lets the master announcement leave the queue
 
 test("a request streams BEGIN, all modifiers with roster zeros, and END", function()
@@ -124,7 +124,7 @@ end)
 
 test("a busy send queue answers BUSY instead of queueing more streams", function()
     local busy = member("Busy")
-    assert(busy.ns.SetModifier("Busy", 1) and busy.ns.SelectMaster("Busy"))
+    assert(busy.ns.SelectMaster("Busy") and busy.ns.SetModifier("Busy", 1))
     advance(1)
     busy.result = 11 -- restricted communication: nothing leaves the queue
     local mark = #delivered
@@ -145,7 +145,7 @@ end)
 
 test("queued streams are dropped when the master stops being the master", function()
     local lost = member("Lost")
-    assert(lost.ns.SetModifier("Lost", 1) and lost.ns.SelectMaster("Lost"))
+    assert(lost.ns.SelectMaster("Lost") and lost.ns.SetModifier("Lost", 1))
     advance(1)
     lost.result = 11
     local id, mark = ask(lost)
@@ -161,8 +161,8 @@ for i = 1, 99 do bigRoster[#bigRoster + 1] = string.format("Guild Member Number 
 test("large rosters are packed into VALUE messages of at most 255 bytes", function()
     local big = client("Big Master")
     big.roster = bigRoster
-    for i = 2, #bigRoster do assert(big.ns.SetModifier(bigRoster[i], i * 1.5)) end
     assert(big.ns.SelectMaster("Big Master"))
+    for i = 2, #bigRoster do assert(big.ns.SetModifier(bigRoster[i], i * 1.5)) end
     bigRoster[#bigRoster + 1] = "Follower"
     advance(1)
     local id, mark = ask(big, "Follower")
@@ -188,7 +188,8 @@ end)
 test("becoming master announces the data stamp to the guild", function()
     local alpha = client("Alpha")
     alpha.roster = { "Alpha", "Beta" }
-    assert(alpha.ns.SetModifier("Alpha", 4))
+    alpha.ns.db.modifiers.Alpha = 4 -- data that exists before the player becomes master
+    alpha.ns.TouchModifiers()
     local mark = #delivered
     assert(alpha.ns.SelectMaster("Alpha"))
     advance(1)
@@ -203,7 +204,9 @@ test("nothing is announced without data or without being master", function()
     assert(blank.ns.SelectMaster("Blank") and blank.ns.GetUpdatedAt() == 0)
     blank.ns.AnnounceMaster()
     local bystander = member("Bystander")
-    assert(bystander.ns.SetModifier("Bystander", 1) and bystander.ns.SelectMaster("Master"))
+    assert(bystander.ns.SelectMaster("Master"))
+    bystander.ns.db.modifiers.Bystander = 1
+    bystander.ns.TouchModifiers()
     bystander.ns.AnnounceMaster()
     advance(5)
     assert(#delivered == mark)
@@ -213,7 +216,7 @@ test("no announcement is sent while the addon prefix is unavailable", function()
     local noPrefix = member("NoPrefix")
     noPrefix.prefix = false
     noPrefix.ns.InitGuildSync()
-    assert(noPrefix.ns.SetModifier("NoPrefix", 1) and noPrefix.ns.SelectMaster("NoPrefix"))
+    assert(noPrefix.ns.SelectMaster("NoPrefix") and noPrefix.ns.SetModifier("NoPrefix", 1))
     noPrefix.ns.AnnounceMaster()
     advance(5)
     assert(#messagesFrom("NoPrefix", "ANNOUNCE") == 0)

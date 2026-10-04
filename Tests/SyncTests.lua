@@ -12,8 +12,8 @@ local backupCount, login, messagesFrom = harness.backupCount, harness.login, har
 local test = harness.suite("Sync master and follower together")
 
 local p, f = client("Master"), client("Follower")
-assert(p.ns.SetModifier("Master", 12.5) and p.ns.SetModifier("FormerMember", -4))
-assert(p.ns.SelectMaster("Master") and f.ns.SelectMaster("Master"))
+assert(p.ns.SelectMaster("Master") and p.ns.SetModifier("Master", 12.5) and p.ns.SetModifier("FormerMember", -4))
+assert(f.ns.SelectMaster("Master"))
 
 test("streams modifiers and missing roster zeros, with progress output", function()
     local syncMark, masterMark = #f.prints, #p.prints
@@ -98,8 +98,8 @@ for i = 1, 98 do bigRoster[#bigRoster + 1] = string.format("Guild Member Number 
 
 test("large rosters are packed into several VALUE messages", function()
     bp.roster, bf.roster = bigRoster, bigRoster
-    for i = 3, #bigRoster do assert(bp.ns.SetModifier(bigRoster[i], i * 1.5)) end
     assert(bp.ns.SelectMaster("Big Master") and bf.ns.SelectMaster("Big Master"))
+    for i = 3, #bigRoster do assert(bp.ns.SetModifier(bigRoster[i], i * 1.5)) end
     local mark, valueMessages, deliveredBefore = #bf.prints, 0, #delivered
     assert(requestSync(bf))
     advance(10)

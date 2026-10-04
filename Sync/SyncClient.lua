@@ -120,6 +120,20 @@ function ns.SelectMaster(name)
     return true
 end
 
+function ns.DeselectMaster()
+    if pending then ns.Print(ns.L.BUSY); return false end
+    ns.db.sync.master = nil
+    masterOnline, awaitingLogin = nil, false
+    ns.Print(ns.L.MASTER_CLEARED)
+    ns.RefreshRoster()
+    return true
+end
+
+function ns.ToggleMaster(name)
+    if name == ns.db.sync.master then return ns.DeselectMaster() end
+    return ns.SelectMaster(name)
+end
+
 function ns.RequestSync()
     if not Sync.IsReady() then ns.Print(ns.L.PREFIX_FAILED); return false end
     if pending then ns.Print(ns.L.BUSY); return false end

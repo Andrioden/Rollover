@@ -17,6 +17,7 @@ end
 local function T() return f.env.GetServerTime() end
 
 test("import rejects invalid JSON and keeps current data", function()
+    assert(f.ns.SelectMaster("Follower"))
     f.ns.db.modifiers = { OldMember = 42 }
     assert(not f.ns.ImportModifiers(json('{"bad|name":7}', T())))
     assert(not f.ns.ImportModifiers(json('{"":7}', T())))
@@ -36,7 +37,7 @@ test("import rejects an invalid updatedAt", function()
     assert(f.ns.GetModifier("OldMember") == 42)
 end)
 
-test("import replaces the modifier table (no master selected)", function()
+test("import replaces the modifier table", function()
     assert(f.ns.ImportModifiers(json('{"Master":7,"ZeroMember":0}', T())))
     assert(f.ns.GetModifier("Master") == 7 and f.ns.GetModifier("OldMember") == 0)
     assert(f.ns.db.sync.updatedAt == T(), "the data keeps the age it came with")
@@ -130,6 +131,8 @@ end)
 test("missing JSON API is handled without errors", function()
     local noAPI = client("NoAPI")
     noAPI.env.C_EncodingUtil = nil
+    noAPI.roster = { "NoAPI" }
+    assert(noAPI.ns.SelectMaster("NoAPI"))
     assert(not noAPI.ns.ImportModifiers(json("{}", T())))
     noAPI.ns.ExportModifiers()
 end)
@@ -137,7 +140,7 @@ end)
 test("realm-less 'First Last' names export and import", function()
     local rp = client("Andriod En")
     rp.roster = { "Andriod En", "Other Player", "Third Guy" }
-    assert(rp.ns.SetModifier("Andriod En", 220) and rp.ns.SetModifier("Other Player", -3))
+    assert(rp.ns.SelectMaster("Andriod En") and rp.ns.SetModifier("Andriod En", 220) and rp.ns.SetModifier("Other Player", -3))
     rp.ns.ExportModifiers()
     assert(rp.frames.RolloverExportFrame.edit:GetText():find('"Andriod En":220', 1, true))
     advance(5) -- edits may push the stamp up to a few seconds past the server clock
