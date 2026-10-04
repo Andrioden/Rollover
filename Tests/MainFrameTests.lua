@@ -97,11 +97,20 @@ test("clicking a crown selects that publisher and locks local edits", function()
     assert(f.ns.db.sync.publisher == "Publisher")
 end)
 
-test("Tools menu lists sync, backup, export, import and restore", function()
+test("Tools menu lists sync, self-publisher, backup, export, import and restore", function()
     labels = menuEntries()
-    for _, key in ipairs({ "SYNC_FROM_PUBLISHER", "BACKUP", "EXPORT", "IMPORT", "RESTORE" }) do
+    for _, key in ipairs({ "SYNC_FROM_PUBLISHER", "SET_PUBLISHER", "BACKUP", "EXPORT", "IMPORT", "RESTORE" }) do
         assert(labels[f.ns.L[key]], key)
     end
+    local syncIndex, publisherIndex
+    for index, entry in ipairs(f.menu) do
+        if entry.label == f.ns.L.SYNC_FROM_PUBLISHER then syncIndex = index end
+        if entry.label == f.ns.L.SET_PUBLISHER then publisherIndex = index end
+    end
+    assert(publisherIndex == syncIndex + 1, "Set as publisher should follow Sync from publisher")
+    labels[f.ns.L.SET_PUBLISHER].action()
+    assert(f.ns.db.sync.publisher == "Follower" and f.ns.IsPublisher())
+    assert(f.ns.SelectPublisher("Publisher"))
     assert(not labels[f.ns.L.CANCEL_SYNC])
 end)
 
@@ -113,6 +122,7 @@ test("Tools sync becomes Cancel while receiving and locks the crowns", function(
     assert(not crownA.enabled)
     labels = menuEntries()
     assert(labels[f.ns.L.CANCEL_SYNC] and not labels[f.ns.L.SYNC_FROM_PUBLISHER])
+    assert(labels[f.ns.L.SET_PUBLISHER].enabled == false)
     assert(labels[f.ns.L.IMPORT].enabled == false and labels[f.ns.L.RESTORE].enabled == false)
 end)
 

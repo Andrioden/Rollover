@@ -122,6 +122,10 @@ local function ShowTools(button)
         else
             root:CreateButton(ns.L.SYNC_FROM_PUBLISHER, ns.RequestSync)
         end
+        local setPublisher = root:CreateButton(ns.L.SET_PUBLISHER, function()
+            ns.SelectPublisher(ns.GetPlayerName())
+        end)
+        setPublisher:SetEnabled(not ns.IsSyncPending())
         root:CreateDivider()
         root:CreateButton(ns.L.BACKUP, ns.SaveBackup)
         root:CreateButton(ns.L.EXPORT, ns.ExportModifiers)
