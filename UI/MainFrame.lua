@@ -115,6 +115,16 @@ function ns.RefreshRoster()
     end
 end
 
+StaticPopupDialogs["ROLLOVER_RESET_DATA"] = {
+    text = ns.L.RESET_CONFIRM,
+    button1 = ACCEPT,
+    button2 = CANCEL,
+    OnAccept = function() ns.ResetData() end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
 local function ShowTools(button)
     MenuUtil.CreateContextMenu(button, function(_, root)
         if ns.IsSyncPending() then
@@ -144,6 +154,9 @@ local function ShowTools(button)
                 restore:CreateButton(key, function() ns.RestoreBackup(key) end)
             end
         end
+        root:CreateDivider()
+        local reset = root:CreateButton(ns.L.RESET, function() StaticPopup_Show("ROLLOVER_RESET_DATA") end)
+        reset:SetEnabled(not ns.IsSyncPending())
     end)
 end
 

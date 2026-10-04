@@ -8,6 +8,62 @@ local function copy(source)
     return result
 end
 
+-- Minimal JSON for the mocked C_EncodingUtil: objects, strings, numbers, true/false/null.
+local function parseJSON(text)
+    local pos = 1
+    local function skip() pos = text:find("%S", pos) or #text + 1 end
+    local value
+    local function string_()
+        local close = text:find('"', pos + 1, true)
+        if text:sub(pos, pos) ~= '"' or not close then error("JSON parse error") end
+        local result = text:sub(pos + 1, close - 1)
+        pos = close + 1
+        return result
+    end
+    function value()
+        skip()
+        local char = text:sub(pos, pos)
+        if char == "{" then
+            local result = {}
+            pos = pos + 1
+            skip()
+            if text:sub(pos, pos) == "}" then pos = pos + 1; return result end
+            while true do
+                skip()
+                local key = string_()
+                skip()
+                if text:sub(pos, pos) ~= ":" then error("JSON parse error") end
+                pos = pos + 1
+                result[key] = value()
+                skip()
+                local separator = text:sub(pos, pos)
+                pos = pos + 1
+                if separator == "}" then return result end
+                if separator ~= "," then error("JSON parse error") end
+            end
+        elseif char == '"' then
+            return string_()
+        end
+        local literal = text:match("^-?%d+%.?%d*[eE]?[+-]?%d*", pos)
+        if literal and #literal > 0 then pos = pos + #literal; return tonumber(literal) end
+        error("JSON parse error")
+    end
+    local result = value()
+    skip()
+    if pos <= #text then error("JSON parse error") end
+    return result
+end
+
+local function serializeJSON(item)
+    if type(item) ~= "table" then
+        return type(item) == "string" and '"' .. item .. '"' or tostring(item)
+    end
+    local rows = {}
+    for key, value in pairs(item) do rows[#rows + 1] = '"' .. key .. '":' .. serializeJSON(value) end
+    table.sort(rows)
+    return "{" .. table.concat(rows, ",") .. "}"
+end
+
 function MockClient.new(root)
     local clients, timers, clock, delivered = {}, {}, 0, {}
     local secret = {}
@@ -80,25 +136,8 @@ function MockClient.new(root)
                 return 0
             end,
         }
-        -- WoW owns JSON parsing; mock its success/error results to test our boundary validation.
-        env.C_EncodingUtil = {
-            DeserializeJSON = function(text)
-                if text == '{"Master":7,"ZeroMember":0}' then
-                    return { Master = 7, ZeroMember = 0 }
-                elseif text == '{"bad|name":7}' then return { ["bad|name"] = 7 }
-                elseif text == '{"":7}' then return { [""] = 7 }
-                elseif text == '{"Andriod En":220}' then return { ["Andriod En"] = 220 }
-                elseif text == '{"Master":"bad"}' then return { Master = "bad" }
-                elseif text == "{}" then return {} end
-                error("JSON parse error")
-            end,
-            SerializeJSON = function(state)
-                local rows = {}
-                for key, value in pairs(state) do rows[#rows + 1] = '"' .. key .. '":' .. tostring(value) end
-                table.sort(rows)
-                return "{" .. table.concat(rows, ",") .. "}"
-            end,
-        }
+        -- WoW owns JSON parsing; the mock only needs to feed our boundary validation realistic data.
+        env.C_EncodingUtil = { DeserializeJSON = parseJSON, SerializeJSON = serializeJSON }
         local methods = {}
         local function frame(frameName)
             local f = { scripts = {}, events = {}, shown = false }
@@ -154,6 +193,8 @@ function MockClient.new(root)
         env.ScrollUtil = { InitScrollBoxListWithScrollBar = function(_, _, view)
             view.factory(function(_, initializer) c.initRow = initializer end)
         end }
+        env.ACCEPT, env.CANCEL, env.StaticPopupDialogs = "Accept", "Cancel", {}
+        env.StaticPopup_Show = function(which) c.popup = which end
         env.MenuUtil = { CreateContextMenu = function(_, callback)
             local entries = {}
             local function menu()
@@ -221,7 +262,7 @@ function MockClient.new(root)
         end
     end
 
-    -- Requests a full-stream sync (updatedAt cleared, like after selecting a new master) and returns
+    -- Requests a sync that always streams (updatedAt cleared, so the request asks with age 0) and returns
     -- the request ID the addon generated (<server time>-<per-client sequence>).
     local sequences = setmetatable({}, { __mode = "k" })
     local function requestSync(c)

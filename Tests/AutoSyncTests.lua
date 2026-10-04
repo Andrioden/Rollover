@@ -54,7 +54,7 @@ test("selecting an online master syncs immediately", function()
     assert(f.ns.db.sync.updatedAt == p.ns.db.sync.updatedAt)
     local output = printedSince(f, 0)
     assert(output:find("Requesting modifiers from Master", 1, true) and output:find("Synced 4 modifiers", 1, true))
-    assert(messagesFrom("Follower", "REQUEST")[1]:match("^REQUEST\t[%w%-]+$"), "a new master must stream in full")
+    assert(messagesFrom("Follower", "REQUEST")[1]:match("^REQUEST\t[%w%-]+\t0$"), "a fresh follower asks with age 0")
 end)
 
 test("selecting an offline master waits for it to come online", function()
@@ -177,14 +177,15 @@ test("restricted communication and send errors are silent for automatic checks",
     f.result = 0
 end)
 
-test("an interrupted stream clears updatedAt so the next check repairs it", function()
+test("an interrupted stream leaves local data and its age untouched", function()
     advance(61)
-    assert(f.ns.db.sync.updatedAt)
+    local stamp, value, backups = f.ns.db.sync.updatedAt, f.ns.GetModifier("Master"), autoBackups(f)
+    assert(stamp and value == 11)
     local id = holdRequest(p, f)
-    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t5", "WHISPER", "Master")
-    assert(f.ns.db.sync.updatedAt == nil)
+    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t" .. (stamp + 5), "WHISPER", "Master")
+    f.ns.OnSyncMessage("Rollover", "VALUE\t" .. id .. "\t1\tMaster\t-7", "WHISPER", "Master")
     f.ns.CancelSync()
-    assert(f.ns.db.sync.updatedAt == nil)
+    assert(f.ns.db.sync.updatedAt == stamp and f.ns.GetModifier("Master") == 11 and autoBackups(f) == backups)
     advance(35)
     login(f)
     advance(5)
@@ -198,9 +199,9 @@ test("malformed and unexpected messages are rejected", function()
     p.ns.OnSyncMessage("Rollover", "REQUEST\tbad-id\t1\t2", "WHISPER", "Follower")
     advance(2)
     assert(#delivered == mark)
-    f.ns.db.sync.updatedAt = nil -- CURRENT is only valid for a request that sent updatedAt
     local id = holdRequest(p, f)
-    f.ns.OnSyncMessage("Rollover", "CURRENT\t" .. id, "WHISPER", "Master")
+    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t1\t" .. f.ns.db.sync.updatedAt, "WHISPER", "Master")
+    f.ns.OnSyncMessage("Rollover", "CURRENT\t" .. id, "WHISPER", "Master") -- CURRENT cannot follow BEGIN
     assert(not f.ns.IsSyncPending() and last(f):find("Sync failed", 1, true))
     advance(35)
 end)
@@ -289,4 +290,83 @@ test("the announcement delay grows with the number of online guild members", fun
     assert(#messagesFrom("Beta", "REQUEST", mark) == 0, "62 online members spread checks over 30 s")
     advance(12)
     assert(#messagesFrom("Beta", "REQUEST", mark) == 1)
+end)
+
+local function backupCount(c)
+    local total = 0
+    for _ in pairs(c.ns.db.backups) do total = total + 1 end
+    return total
+end
+
+local old, new = client("Oldie"), client("Newbie")
+
+test("a follower rejects a master with older data before touching anything", function()
+    advance(61)
+    old.roster, new.roster = { "Oldie", "Newbie" }, { "Oldie", "Newbie" }
+    old.online.Newbie, new.online.Oldie = true, true
+    assert(old.ns.SelectMaster("Oldie") and old.ns.SetModifier("Oldie", 1))
+    new.ns.db.modifiers = { Oldie = 77 }
+    new.ns.db.sync.updatedAt = old.ns.db.sync.updatedAt + 100
+    local backups = backupCount(new)
+    assert(new.ns.SelectMaster("Oldie"))
+    advance(3)
+    assert(#messagesFrom("Oldie", "BEGIN") == 1, "the master streams; the follower refuses")
+    assert(not new.ns.IsSyncPending() and new.ns.GetModifier("Oldie") == 77)
+    assert(new.ns.db.sync.updatedAt == old.ns.db.sync.updatedAt + 100 and backupCount(new) == backups)
+    local output = printedSince(new, 0)
+    assert(output:find("Oldie has older modifiers", 1, true) and not output:find("may be incomplete", 1, true))
+end)
+
+test("announcements older than the local data are ignored", function()
+    advance(61)
+    local mark = #delivered
+    local stamp = old.ns.db.sync.updatedAt
+    new.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-1\t" .. stamp, "GUILD", "Oldie")
+    advance(30)
+    assert(#messagesFrom("Newbie", "REQUEST", mark) == 0)
+end)
+
+test("automatic checks report an older master once per stamp, manual syncs always", function()
+    advance(61)
+    local mark = #new.prints
+    login(new)
+    advance(5)
+    assert(#new.prints == mark and not new.ns.IsSyncPending() and new.ns.GetModifier("Oldie") == 77)
+    advance(61)
+    assert(new.ns.RequestSync())
+    advance(3)
+    assert(printedSince(new, mark):find("has older modifiers", 1, true))
+end)
+
+test("reset data lets a follower take the older master's data", function()
+    advance(61)
+    assert(new.ns.ResetData() and new.ns.db.sync.updatedAt == 0)
+    assert(new.ns.RequestSync())
+    advance(3)
+    assert(new.ns.GetModifier("Oldie") == 1 and new.ns.db.sync.updatedAt == old.ns.db.sync.updatedAt)
+    assert(not new.ns.IsSyncPending())
+end)
+
+test("a master with the same updatedAt never replaces local data", function()
+    advance(61)
+    new.ns.db.modifiers.Oldie = 5 -- diverged content under an equal stamp
+    local mark = #delivered
+    assert(new.ns.RequestSync())
+    advance(3)
+    assert(#messagesFrom("Oldie", "CURRENT", mark) == 1 and #messagesFrom("Oldie", "BEGIN", mark) == 0)
+    assert(new.ns.GetModifier("Oldie") == 5)
+end)
+
+test("a fresh master with no data cannot overwrite followers", function()
+    advance(61)
+    local blank, other = client("Blank"), client("Other")
+    blank.roster, other.roster = { "Blank", "Other" }, { "Blank", "Other" }
+    blank.online.Other, other.online.Blank = true, true
+    assert(blank.ns.SelectMaster("Blank") and blank.ns.GetUpdatedAt() == 0)
+    other.ns.db.modifiers = { Blank = 5 }
+    other.ns.db.sync.updatedAt = 1800000005
+    assert(other.ns.SelectMaster("Blank"))
+    advance(3)
+    assert(other.ns.GetModifier("Blank") == 5 and other.ns.db.sync.updatedAt == 1800000005)
+    assert(#messagesFrom("Blank", "BEGIN") >= 1 and not other.ns.IsSyncPending())
 end)

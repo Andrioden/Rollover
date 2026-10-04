@@ -103,9 +103,9 @@ test("clicking a master button selects that master and locks local edits", funct
     assert(f.ns.db.sync.master == "Master")
 end)
 
-test("Tools menu lists sync, self-master, backup, export, import and restore", function()
+test("Tools menu lists sync, self-master, backup, export, import, restore and reset", function()
     labels = menuEntries()
-    for _, key in ipairs({ "SYNC_FROM_MASTER", "SET_MASTER", "BACKUP", "EXPORT", "IMPORT", "RESTORE" }) do
+    for _, key in ipairs({ "SYNC_FROM_MASTER", "SET_MASTER", "BACKUP", "EXPORT", "IMPORT", "RESTORE", "RESET" }) do
         assert(labels[f.ns.L[key]], key)
     end
     local syncIndex, masterIndex
@@ -121,6 +121,18 @@ test("Tools menu lists sync, self-master, backup, export, import and restore", f
     assert(not labels[f.ns.L.CANCEL_SYNC])
 end)
 
+test("Reset data asks for confirmation, then resets and stays available to followers", function()
+    f.ns.db.modifiers = { Master = 3 }
+    f.ns.db.sync.updatedAt = 99
+    local entry = menuEntries()[f.ns.L.RESET]
+    assert(entry.enabled ~= false and not f.ns.CanEditModifiers())
+    entry.action()
+    assert(f.popup == "ROLLOVER_RESET_DATA" and f.ns.GetModifier("Master") == 3, "nothing happens before confirming")
+    assert(f.env.StaticPopupDialogs.ROLLOVER_RESET_DATA.text == f.ns.L.RESET_CONFIRM)
+    f.env.StaticPopupDialogs.ROLLOVER_RESET_DATA.OnAccept()
+    assert(f.ns.GetModifier("Master") == 0 and f.ns.db.sync.updatedAt == 0)
+end)
+
 test("Tools sync becomes Cancel while receiving and locks the master buttons", function()
     advance(35)
     labels[f.ns.L.SYNC_FROM_MASTER].action()
@@ -131,6 +143,7 @@ test("Tools sync becomes Cancel while receiving and locks the master buttons", f
     assert(labels[f.ns.L.CANCEL_SYNC] and not labels[f.ns.L.SYNC_FROM_MASTER])
     assert(labels[f.ns.L.SET_MASTER].enabled == false)
     assert(labels[f.ns.L.IMPORT].enabled == false and labels[f.ns.L.RESTORE].enabled == false)
+    assert(labels[f.ns.L.RESET].enabled == false)
 end)
 
 test("Cancel restores the Tools sync entry and unlocks the master buttons", function()

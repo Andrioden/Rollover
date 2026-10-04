@@ -16,16 +16,17 @@ local queue, recentRequests = {}, {}
 local pending, timer, ready
 local sequence = 0
 local masterOnline, awaitingLogin, lastAutoCheck
+-- Master stamp of the last "older than yours" rejection, so automatic checks warn once per stamp.
+local rejectedStamp
 
--- Ends the active transfer with a chat message. Once BEGIN arrived the local table was
--- cleared, so the player is also told that the data may be incomplete. Automatic checks
--- that fail before BEGIN only log to the debug window.
+
+-- Ends the active transfer with a chat message. The received values are only applied at END, so
+-- a failed or cancelled transfer never changes local data. Automatic checks that fail before
+-- BEGIN (nothing was announced to the player yet) only log to the debug window.
 local function EndTransfer(message)
-    local started = pending.count ~= nil
-    local quiet = pending.auto and not started
+    local quiet = pending.auto and pending.count == nil
     pending = nil
     if quiet then ns.Debug(message) else ns.Print(message) end
-    if started then ns.Print(ns.L.PARTIAL_CHANGES) end
     ns.RefreshRoster()
 end
 
@@ -124,16 +125,14 @@ function ns.CancelSync()
     end
 end
 
--- Requests send the stored updatedAt so an up-to-date master answers CURRENT instead of
--- streaming. It is empty after a new master was selected or an interrupted stream, which
--- forces a full stream.
+-- Requests send the local updatedAt so an up-to-date master answers CURRENT instead of streaming.
 local AutoCheck
 local function StartRequest(auto, attempt)
     sequence = sequence + 1
     local transfer = {
         id = string.format("%d-%d", GetServerTime(), sequence),
-        sender = ns.db.sync.master, received = 0, names = {}, auto = auto,
-        have = ns.db.sync.updatedAt,
+        sender = ns.db.sync.master, received = 0, modifiers = {}, auto = auto,
+        have = ns.GetUpdatedAt(),
     }
     pending = transfer
     local request = transfer.have and Message("REQUEST", transfer.id, transfer.have) or Message("REQUEST", transfer.id)
@@ -183,12 +182,9 @@ function ns.SelectMaster(name)
     ns.db.sync.master = name
     masterOnline = nil
     if ns.IsMaster() then
-        if not ns.db.sync.updatedAt then ns.TouchModifiers() end
         ns.Print(ns.L.LOCAL_MASTER)
         ns.AnnounceMaster()
     else
-        -- The local table came from somewhere else, so the new master must always stream.
-        ns.db.sync.updatedAt = nil
         masterOnline = ns.IsGuildMemberOnline(name)
         if masterOnline then
             ns.Print(string.format(ns.L.MASTER_SET, name))
@@ -204,10 +200,10 @@ end
 -- Tells every online guild member the new master's updatedAt. Followers that picked this player
 -- as master earlier (while they were offline or not yet master) then run a normal check.
 function ns.AnnounceMaster()
-    if not ready or not IsInGuild() or not ns.IsMaster() or not ns.db.sync.updatedAt then return end
+    if not ready or not IsInGuild() or not ns.IsMaster() or ns.GetUpdatedAt() == 0 then return end
     sequence = sequence + 1
     local id = string.format("%d-%d", GetServerTime(), sequence)
-    Enqueue({ channel = "GUILD", snapshot = true, messages = { Message("ANNOUNCE", id, ns.db.sync.updatedAt) } })
+    Enqueue({ channel = "GUILD", snapshot = true, messages = { Message("ANNOUNCE", id, ns.GetUpdatedAt()) } })
 end
 
 function ns.RequestSync()
@@ -249,8 +245,7 @@ end
 local function Respond(sender, id, have)
     -- An up-to-date follower costs one tiny reply, is not rate limited and is not announced.
     if ns.IsMaster() then
-        if not ns.db.sync.updatedAt then ns.TouchModifiers() end
-        if have == ns.db.sync.updatedAt then
+        if have == ns.GetUpdatedAt() then
             if #queue >= 2 then ns.Debug("Dropped CURRENT reply: send queue is busy"); return end
             ns.Debug(sender .. " is up to date")
             Enqueue({ target = sender, snapshot = true, messages = { Message("CURRENT", id) } })
@@ -276,7 +271,7 @@ local function Respond(sender, id, have)
     local names = {}
     for name in pairs(modifiers) do names[#names + 1] = name end
     table.sort(names)
-    local messages = { Message("BEGIN", id, #names, ns.db.sync.updatedAt) }
+    local messages = { Message("BEGIN", id, #names, ns.GetUpdatedAt()) }
     for _, message in ipairs(ValueMessages(id, names, modifiers)) do messages[#messages + 1] = message end
     messages[#messages + 1] = Message("END", id, #names)
     if Enqueue({ target = sender, snapshot = true, messages = messages }) then
@@ -317,8 +312,9 @@ function ns.OnPlayerEnteringWorld(isLogin, isReload)
     ns.RequestGuildRoster()
 end
 
--- Only the master this player selected is followed. A differing updatedAt (or none) means the
--- master has data we have not synced, which the normal request/CURRENT/stream check settles.
+-- Only the master this player selected is followed. A newer updatedAt means the master has data
+-- we have not synced, which the normal request/CURRENT/stream check settles. Older or equal
+-- announcements are ignored: data only moves forward.
 local function AnnounceDelay()
     local online = 0
     for i = 1, GetNumGuildMembers() do
@@ -329,11 +325,11 @@ local function AnnounceDelay()
 end
 
 local function OnAnnounce(member, stamp)
-    if member ~= ns.db.sync.master or ns.IsMaster() or stamp == ns.db.sync.updatedAt then return end
+    if member ~= ns.db.sync.master or ns.IsMaster() or stamp <= ns.GetUpdatedAt() then return end
     masterOnline = true
     ns.Debug(member .. " announced newer modifiers")
     C_Timer.After(AnnounceDelay(), function()
-        if ns.db.sync.master == member and stamp ~= ns.db.sync.updatedAt then AutoCheck(1, true) end
+        if ns.db.sync.master == member and stamp > ns.GetUpdatedAt() then AutoCheck(1, true) end
     end)
 end
 
@@ -370,14 +366,19 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         local count = #fields == 4 and Integer(fields[3], MAX_MEMBERS)
         local stamp = #fields == 4 and Integer(fields[4], MAX_STAMP)
         if not count or not stamp or pending.count then Fail(ns.L.INVALID_TRANSFER); return end
-        -- The backup is taken here, right before the local table is replaced.
-        ns.SaveBackup(pending.auto)
+        -- Data only moves forward: a master older than the local data is refused, however it got to be
+        -- master (Tools > Reset data is the deliberate way around this). Automatic checks stay quiet
+        -- when the same stale stamp was already reported.
+        local own = ns.GetUpdatedAt()
+        if stamp < own then
+            if not (pending.auto and rejectedStamp == stamp) then pending.auto = nil end
+            rejectedStamp = stamp
+            Fail(string.format(ns.L.STALE_MASTER, member, ns.FormatStamp(stamp), ns.FormatStamp(own)))
+            return
+        end
+        -- Values are buffered; local data and its updatedAt are replaced together at END.
         pending.count, pending.updatedAt = count, stamp
-        ns.db.modifiers = {}
-        -- Stays empty unless END arrives, so an incomplete transfer is repaired by the next check.
-        ns.db.sync.updatedAt = nil
         ns.Print(string.format(ns.L.RECEIVING, count, member))
-        ns.RefreshRoster()
     elseif fields[1] == "VALUE" then
         local index = #fields >= 5 and #fields % 2 == 1 and Integer(fields[3], MAX_MEMBERS)
         local last = index and index + (#fields - 3) / 2 - 1
@@ -389,7 +390,7 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         for i = 4, #fields, 2 do
             local name, value = fields[i], tonumber(fields[i + 1])
             if not ns.IsValidMemberName(name) or not ns.IsValidModifier(value)
-                or pending.names[name] or seen[name] then
+                or pending.modifiers[name] or seen[name] then
                 Fail(ns.L.INVALID_TRANSFER)
                 return
             end
@@ -398,25 +399,26 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
         end
         local labels = {}
         for _, entry in ipairs(entries) do
-            pending.names[entry.name] = true
-            ns.db.modifiers[entry.name] = entry.value
+            pending.modifiers[entry.name] = entry.value
             labels[#labels + 1] = FormatEntry(entry.name, entry.value)
         end
         pending.received = last
-        ns.Print(string.format(ns.L.SYNCED_ENTRIES, last, pending.count, table.concat(labels, ", ")))
-        ns.RefreshRoster()
+        ns.Print(string.format(ns.L.RECEIVED_ENTRIES, last, pending.count, table.concat(labels, ", ")))
     elseif fields[1] == "END" then
         local count = #fields == 3 and Integer(fields[3], MAX_MEMBERS)
         if not pending.count or count ~= pending.count or pending.received ~= count then
             Fail(ns.L.INVALID_TRANSFER)
             return
         end
+        -- The backup is taken right before the local table is replaced.
+        ns.SaveBackup(pending.auto)
+        ns.db.modifiers = pending.modifiers
         ns.db.sync.updatedAt = pending.updatedAt
         pending = nil
         ns.Print(string.format(ns.L.SYNCED, count, member))
         ns.RefreshRoster()
     elseif fields[1] == "CURRENT" then
-        if #fields ~= 2 or pending.count or not pending.have then Fail(ns.L.INVALID_TRANSFER); return end
+        if #fields ~= 2 or pending.count then Fail(ns.L.INVALID_TRANSFER); return end
         local auto = pending.auto
         pending = nil
         if auto then

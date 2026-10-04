@@ -10,7 +10,9 @@ local defaults = {
     version = DB_VERSION,
     modifiers = {}, -- [guild roster name] = number
     backups = {}, -- [date-time] = copy of modifiers
-    sync = {}, -- { master = guild roster name, updatedAt = master server time of the last change }
+    -- master = guild roster name; updatedAt = server time of the last real change to the modifiers,
+    -- carried along with the data itself (0 or nil = no known age, e.g. after a reset)
+    sync = {},
 }
 
 function ns.InitDB()
@@ -82,7 +84,12 @@ function ns.CanEditModifiers()
     return (not ns.db.sync.master or ns.IsMaster()) and not ns.IsSyncPending()
 end
 
--- Followers compare this value with the master's, never with their own clock. It always increases.
+function ns.GetUpdatedAt()
+    return ns.db.sync.updatedAt or 0
+end
+
+-- Called only when a modifier really changed. Server time is shared by all clients, so stamps are
+-- comparable; the +1 keeps it strictly increasing for edits within the same second.
 function ns.TouchModifiers()
     ns.db.sync.updatedAt = math.max(GetServerTime(), (ns.db.sync.updatedAt or 0) + 1)
 end
@@ -115,7 +122,7 @@ function ns.SaveBackup(auto)
         suffix = suffix + 1
         key = base .. " (" .. suffix .. ")"
     end
-    ns.db.backups[key] = CopyTable(ns.db.modifiers)
+    ns.db.backups[key] = { updatedAt = ns.GetUpdatedAt(), modifiers = CopyTable(ns.db.modifiers) }
     if auto == true then PruneAutoBackups() end
     ns.Print(string.format(ns.L.BACKUP_SAVED, key))
     return key
@@ -141,13 +148,26 @@ function ns.ValidateModifierState(state)
     return true
 end
 
+function ns.FormatStamp(stamp)
+    return date("%Y-%m-%d %H:%M:%S", stamp)
+end
+
 function ns.RestoreBackup(key)
     if not ns.CanReplaceModifiers() then return false end
     local backup = ns.db.backups[key]
     if not backup then ns.Print(ns.L.BACKUP_MISSING); return false end
+    if type(backup.modifiers) ~= "table" or type(backup.updatedAt) ~= "number" then
+        ns.Print(ns.L.BACKUP_INVALID)
+        return false
+    end
+    -- Restoring is going back in time unless the backup is as new as the current data.
+    if backup.updatedAt < ns.GetUpdatedAt() then
+        ns.Print(string.format(ns.L.RESTORE_OLDER, key, ns.FormatStamp(backup.updatedAt), ns.FormatStamp(ns.GetUpdatedAt())))
+        return false
+    end
     ns.SaveBackup()
-    ns.db.modifiers = CopyTable(backup)
-    ns.TouchModifiers()
+    ns.db.modifiers = CopyTable(backup.modifiers)
+    ns.db.sync.updatedAt = backup.updatedAt
     ns.RefreshRoster()
     ns.Print(string.format(ns.L.BACKUP_RESTORED, key))
     return true
@@ -158,10 +178,27 @@ function ns.ExportModifiers()
         ns.Print(ns.L.JSON_UNAVAILABLE)
         return
     end
-    -- An empty Lua table can serialize as an array; the exchange format is an object.
-    local text = "{}"
-    if next(ns.db.modifiers) then text = C_EncodingUtil.SerializeJSON(ns.db.modifiers) end
-    ns.ShowExportFrame(text)
+    ns.ShowExportFrame(C_EncodingUtil.SerializeJSON({
+        updatedAt = ns.GetUpdatedAt(),
+        modifiers = ns.db.modifiers,
+    }))
+end
+
+-- JSON is { "updatedAt": seconds, "modifiers": { name: number } }. A missing updatedAt counts as the
+-- oldest possible state, so it is only accepted over data that is itself unstamped or reset. The
+-- stamp must not be in the future: server time is shared, so no real state can be.
+local function ParseImport(text)
+    local ok, parsed = pcall(function() return C_EncodingUtil.DeserializeJSON(text) end)
+    if not ok then return nil, string.format(ns.L.INVALID_JSON, tostring(parsed)) end
+    if type(parsed) ~= "table" or type(parsed.modifiers) ~= "table" then return nil, ns.L.INVALID_STATE end
+    local stamp = parsed.updatedAt or 0
+    if not ns.IsValidModifier(stamp) or stamp ~= math.floor(stamp) or stamp < 0
+        or stamp > GetServerTime() then
+        return nil, ns.L.INVALID_STATE
+    end
+    local valid, message = ns.ValidateModifierState(parsed.modifiers)
+    if not valid then return nil, message end
+    return parsed.modifiers, nil, stamp
 end
 
 function ns.ImportModifiers(text)
@@ -171,20 +208,35 @@ function ns.ImportModifiers(text)
         return false
     end
     if #text > MAX_JSON_BYTES then ns.Print(string.format(ns.L.JSON_TOO_LARGE, MAX_JSON_BYTES)); return false end
-    -- Rejects arrays and scalars; an empty array would otherwise pass validation and wipe everything.
     if not text:match("^%s*{") or not text:match("}%s*$") then
         ns.Print(ns.L.INVALID_STATE)
         return false
     end
-    local ok, state = pcall(function() return C_EncodingUtil.DeserializeJSON(text) end)
-    if not ok then ns.Print(string.format(ns.L.INVALID_JSON, tostring(state))); return false end
-    local valid, message = ns.ValidateModifierState(state)
-    if not valid then ns.Print(message); return false end
+    local state, message, stamp = ParseImport(text)
+    if not state then ns.Print(message); return false end
+    local own = ns.GetUpdatedAt()
+    if stamp < own then
+        ns.Print(string.format(ns.L.IMPORT_OLDER, ns.FormatStamp(stamp), ns.FormatStamp(own)))
+        return false
+    end
     ns.SaveBackup()
     ns.db.modifiers = state
-    ns.TouchModifiers()
+    ns.db.sync.updatedAt = stamp
     ns.RefreshRoster()
     ns.Print(ns.L.IMPORTED)
+    return true
+end
+
+-- Clears every modifier and marks the data as older than anything, so any later import, restore or
+-- sync is accepted. This is the only way to take an older data set (see the age checks above and in
+-- GuildSync). Allowed for followers too.
+function ns.ResetData()
+    if ns.IsSyncPending() then ns.Print(ns.L.BUSY); return false end
+    if next(ns.db.modifiers) then ns.SaveBackup() end
+    ns.db.modifiers = {}
+    ns.db.sync.updatedAt = 0
+    ns.RefreshRoster()
+    ns.Print(ns.L.RESET_DONE)
     return true
 end
 

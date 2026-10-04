@@ -17,30 +17,30 @@ test("streams modifiers and missing roster zeros, with progress output", functio
     f.ns.db.modifiers = { OldMember = 42 }
     assert(requestSync(f))
     advance(0.1)
-    assert(f.ns.IsSyncPending() and f.ns.GetModifier("OldMember") == 0)
-    assert(f.ns.GetModifier("Follower") == 0)
+    assert(f.ns.IsSyncPending() and f.ns.GetModifier("OldMember") == 42, "local data is untouched until the stream completes")
     assert(printedSince(p, masterMark):find("Follower requested a sync; sending 5 modifiers.", 1, true))
     advance(1)
     assert(not f.ns.IsSyncPending())
     local output = printedSince(f, syncMark)
     -- All five entries fit in one VALUE message and are listed together.
-    assert(output:find("Synced 5/5: Follower (0), FormerMember (-4), Master (+12.5), ThirdMember (0), ZeroMember (0)", 1, true))
+    assert(output:find("Received 5/5: Follower (0), FormerMember (-4), Master (+12.5), ThirdMember (0), ZeroMember (0)", 1, true))
     assert(output:find("Requesting modifiers from Master", 1, true))
     assert(output:find("Receiving 5 modifiers from Master", 1, true))
     assert(output:find("Synced 5 modifiers from Master", 1, true))
     assert(not output:find("Sync failed", 1, true))
     assert(f.ns.GetModifier("Master") == 12.5 and f.ns.GetModifier("FormerMember") == -4)
-    assert(f.ns.db.modifiers.ZeroMember == 0)
+    assert(f.ns.db.modifiers.ZeroMember == 0 and f.ns.GetModifier("OldMember") == 0)
+    assert(f.ns.GetUpdatedAt() == p.ns.GetUpdatedAt())
     advance(35)
 end)
 
 test("sync keeps a pre-sync backup that can be restored", function()
     f.ns.db.modifiers = { OldMember = 43 }
     local function findBackup()
-        for key, state in pairs(f.ns.db.backups) do if state.OldMember == 43 then return key end end
+        for key, backup in pairs(f.ns.db.backups) do if backup.modifiers.OldMember == 43 then return key end end
     end
     assert(requestSync(f))
-    assert(not findBackup()) -- taken when the stream begins, not when the request is sent
+    assert(not findBackup()) -- taken when the stream completes, not when the request is sent
     advance(1.1)
     local before = findBackup()
     assert(before and not before:find("(auto)", 1, true))
@@ -68,15 +68,23 @@ test("protocol guards reject spoofed, secret and mismatched messages", function(
     advance(35)
 end)
 
-test("incomplete transfer ends with a 'may be incomplete' warning", function()
+test("an incomplete transfer changes nothing: data, age and backups stay", function()
     f.ns.db.modifiers = { OldMember = 42 }
+    f.ns.db.sync.updatedAt = 1700000000
     local id = requestSync(f)
-    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t5", "WHISPER", "Master")
+    f.ns.db.sync.updatedAt = 1700000000
+    local backups = 0
+    for _ in pairs(f.ns.db.backups) do backups = backups + 1 end
+    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t1700000005", "WHISPER", "Master")
     f.ns.OnSyncMessage("Rollover", "VALUE\t" .. id .. "\t1\tMaster\t-7", "WHISPER", "Master")
-    assert(f.ns.GetModifier("Master") == -7)
+    assert(f.ns.GetModifier("Master") == 0, "received values are only buffered")
     f.ns.OnSyncMessage("Rollover", "END\t" .. id .. "\t2", "WHISPER", "Master")
-    assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Master") == -7)
-    assert(last(f):find("may be incomplete", 1, true))
+    local after = 0
+    for _ in pairs(f.ns.db.backups) do after = after + 1 end
+    assert(not f.ns.IsSyncPending() and last(f):find("Sync failed", 1, true))
+    assert(f.ns.GetModifier("OldMember") == 42 and f.ns.GetModifier("Master") == 0)
+    assert(f.ns.db.sync.updatedAt == 1700000000 and after == backups)
+    assert(not table.concat(f.prints, "\n"):find("may be incomplete", 1, true))
     advance(35)
 end)
 
@@ -179,7 +187,7 @@ for i = 1, 98 do bigRoster[#bigRoster + 1] = string.format("Guild Member Number 
 
 test("large rosters are packed into several VALUE messages", function()
     bp.roster, bf.roster = bigRoster, bigRoster
-    for i = 3, #bigRoster do bp.ns.db.modifiers[bigRoster[i]] = i * 1.5 end
+    for i = 3, #bigRoster do assert(bp.ns.SetModifier(bigRoster[i], i * 1.5)) end
     assert(bp.ns.SelectMaster("Big Master") and bf.ns.SelectMaster("Big Master"))
     local mark, valueMessages, deliveredBefore = #bf.prints, 0, #delivered
     assert(requestSync(bf))
@@ -189,8 +197,8 @@ test("large rosters are packed into several VALUE messages", function()
         if delivered[i].text:find("VALUE\t", 1, true) == 1 then valueMessages = valueMessages + 1 end
     end
     assert(valueMessages > 1 and valueMessages < 30, valueMessages)
-    assert(count(bf, "Synced ", mark) - 1 == valueMessages and bf.ns.GetModifier(bigRoster[100]) == 150)
-    assert(printedSince(bf, mark):find("Synced 100/100:", 1, true))
+    assert(count(bf, "Received ", mark) == valueMessages and bf.ns.GetModifier(bigRoster[100]) == 150)
+    assert(printedSince(bf, mark):find("Received 100/100:", 1, true))
 end)
 
 test("a duplicate name inside one packed VALUE fails the transfer", function()

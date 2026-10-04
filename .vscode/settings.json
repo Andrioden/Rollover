@@ -25,6 +25,10 @@
         "LOCALIZED_CLASS_NAMES_MALE",
         "GetUnitName",
         "SlashCmdList",
-        "RANDOM_ROLL_RESULT"
+        "RANDOM_ROLL_RESULT",
+        "StaticPopupDialogs",
+        "ACCEPT",
+        "CANCEL",
+        "StaticPopup_Show"
     ]
 }

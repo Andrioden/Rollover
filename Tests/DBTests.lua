@@ -3,7 +3,7 @@
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
 local harness = require("Tests.MockClient").new(root)
-local client, last = harness.client, harness.last
+local advance, client, last = harness.advance, harness.client, harness.last
 local test = harness.suite("Core\\DB.lua")
 
 local p, f = client("Master"), client("Follower")
@@ -18,9 +18,12 @@ end)
 test("backups are independent copies and restorable", function()
     local backup1, backup2 = p.ns.SaveBackup(), p.ns.SaveBackup()
     assert(backup1 ~= backup2)
-    p.ns.SetModifier("Master", 22)
-    assert(p.ns.db.backups[backup1].Master == 12.5)
-    assert(p.ns.RestoreBackup(backup1) and p.ns.GetPlayerModifier() == 12.5)
+    local stamp = p.ns.GetUpdatedAt()
+    assert(p.ns.db.backups[backup1].updatedAt == stamp and p.ns.db.backups[backup1].modifiers.Master == 12.5)
+    p.ns.db.modifiers.Master = 22
+    assert(p.ns.db.backups[backup1].modifiers.Master == 12.5)
+    assert(p.ns.RestoreBackup(backup1) and p.ns.GetPlayerModifier() == 12.5, "a backup as new as the data restores")
+    assert(p.ns.GetUpdatedAt() == stamp)
 end)
 
 test("master can edit locally without announcing", function()
@@ -38,7 +41,7 @@ test("follower cannot edit modifiers", function()
     assert(not f.ns.SetModifier("Follower", 99))
 end)
 
-test("every change bumps updatedAt upward; unchanged edits do not", function()
+test("only real edits bump updatedAt; restore and import keep the age of their data", function()
     local stamp = p.ns.db.sync.updatedAt
     assert(stamp)
     assert(p.ns.SetModifier("Master", 12.5) and p.ns.db.sync.updatedAt == stamp)
@@ -46,18 +49,80 @@ test("every change bumps updatedAt upward; unchanged edits do not", function()
     stamp = p.ns.db.sync.updatedAt
     assert(p.ns.SetModifier("Master", 14) and p.ns.db.sync.updatedAt > stamp) -- same server second
     stamp = p.ns.db.sync.updatedAt
-    assert(p.ns.RestoreBackup(p.ns.SaveBackup()) and p.ns.db.sync.updatedAt > stamp)
-    stamp = p.ns.db.sync.updatedAt
-    assert(p.ns.ImportModifiers('{"Master":7,"ZeroMember":0}') and p.ns.db.sync.updatedAt > stamp)
+    assert(p.ns.RestoreBackup(p.ns.SaveBackup()) and p.ns.db.sync.updatedAt == stamp)
+    advance(10) -- rapid test edits pushed the stamp past the server clock; imports may not be from the future
+    local json = '{"updatedAt":' .. stamp .. ',"modifiers":{"Master":7,"ZeroMember":0}}'
+    assert(p.ns.ImportModifiers(json) and p.ns.db.sync.updatedAt == stamp)
+    json = '{"updatedAt":' .. (stamp + 1) .. ',"modifiers":{"Master":8}}'
+    assert(p.ns.ImportModifiers(json) and p.ns.db.sync.updatedAt == stamp + 1, "an import brings its own age")
 end)
 
-test("becoming master starts a timestamp and clears it for a new source", function()
+test("restoring an older backup is blocked until the data is reset", function()
+    local target = p.ns.SaveBackup()
+    local old = p.ns.GetUpdatedAt()
+    assert(p.ns.SetModifier("Master", 41) and p.ns.GetUpdatedAt() > old)
+    local backups, stamp = 0, p.ns.GetUpdatedAt()
+    for _ in pairs(p.ns.db.backups) do backups = backups + 1 end
+    assert(not p.ns.RestoreBackup(target) and last(p):find("Restore blocked", 1, true))
+    local after = 0
+    for _ in pairs(p.ns.db.backups) do after = after + 1 end
+    assert(p.ns.GetModifier("Master") == 41 and p.ns.GetUpdatedAt() == stamp and after == backups)
+    assert(p.ns.ResetData() and p.ns.RestoreBackup(target))
+    assert(p.ns.GetModifier("Master") == 8 and p.ns.GetUpdatedAt() == old, "the backup brings its own age")
+end)
+
+test("legacy or malformed backups are refused", function()
+    p.ns.db.backups["legacy"] = { Master = 1 }
+    assert(not p.ns.RestoreBackup("legacy") and last(p):find("unknown format", 1, true))
+    p.ns.db.backups["legacy"] = nil
+end)
+
+test("restoring a backup saves the current state as a new backup first", function()
+    assert(p.ns.SetModifier("Master", 31))
+    local before = {}
+    for key in pairs(p.ns.db.backups) do before[key] = true end
+    local target = p.ns.SaveBackup()
+    p.ns.db.modifiers.Master = 32 -- same age, different content
+    assert(p.ns.RestoreBackup(target))
+    local added
+    for key, backup in pairs(p.ns.db.backups) do
+        if not before[key] and key ~= target and backup.modifiers.Master == 32 then added = key end
+    end
+    assert(added and p.ns.GetModifier("Master") == 31, "the pre-restore state must be kept")
+end)
+
+test("reset data blanks everything, backs it up and marks the data oldest", function()
+    local own = client("Resetter")
+    own.roster = { "Resetter", "Master" }
+    assert(own.ns.SelectMaster("Resetter") and own.ns.SetModifier("Master", 8))
+    local backups = 0
+    for _ in pairs(own.ns.db.backups) do backups = backups + 1 end
+    assert(own.ns.ResetData())
+    local after = 0
+    for _, backup in pairs(own.ns.db.backups) do after = after + 1; assert(backup.modifiers.Master == 8) end
+    assert(after == backups + 1 and next(own.ns.db.modifiers) == nil and own.ns.db.sync.updatedAt == 0)
+    assert(own.ns.ResetData() and #own.prints > 0)
+    local again = 0
+    for _ in pairs(own.ns.db.backups) do again = again + 1 end
+    assert(again == after, "an empty state is not backed up")
+end)
+
+test("reset data works for followers", function()
+    f.ns.db.modifiers = { Master = 3 }
+    f.ns.db.sync.updatedAt = 12345
+    assert(f.ns.ResetData() and next(f.ns.db.modifiers) == nil and f.ns.db.sync.updatedAt == 0)
+    assert(f.ns.db.sync.master == "Master", "reset keeps the selected master")
+end)
+
+test("selecting a master never changes the age of the data", function()
     local own = client("Solo")
     own.roster = { "Solo", "Master" }
-    assert(own.ns.db.sync.updatedAt == nil)
-    assert(own.ns.SelectMaster("Solo") and own.ns.db.sync.updatedAt)
+    assert(own.ns.db.sync.updatedAt == nil and own.ns.GetUpdatedAt() == 0)
+    assert(own.ns.SelectMaster("Solo") and own.ns.db.sync.updatedAt == nil, "becoming master is not an edit")
+    assert(own.ns.SetModifier("Master", 2) and own.ns.db.sync.updatedAt > 0)
     own.ns.db.sync.updatedAt = 42
-    assert(own.ns.SelectMaster("Master") and own.ns.db.sync.updatedAt == nil)
+    assert(own.ns.SelectMaster("Master") and own.ns.db.sync.updatedAt == 42)
+    assert(own.ns.SelectMaster("Solo") and own.ns.db.sync.updatedAt == 42)
 end)
 
 test("followers cannot import or restore", function()
