@@ -1,7 +1,8 @@
 ## Interface: 16001
 ## Version: 0.0.1
 ## Title: Rollover
-## Notes: Blabla description
+## Notes: Reserve items, roll modifiers and guild modifier tracking. /rollover
+## IconTexture: Interface\Icons\INV_Misc_Dice_02
 ## Author: Andriod
 ## SavedVariables: RolloverDB
 

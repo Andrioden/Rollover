@@ -28,7 +28,7 @@ Update this section as features land.
 | Options UI | Not started |
 | Tools / recovery | Gear-icon Tools menu in the main window: sync from master (becomes cancel sync while receiving; reports "up to date" when nothing changed), set yourself as master, save backup, export JSON, import JSON, restore backup (submenu of dated backups with their name in parentheses, newest first), reset data (confirmation popup; allowed for followers). Setting yourself as master is disabled while receiving a sync. Export and import each have their own window (`UI\ExportFrame.lua`: copy-only text box; `UI\ImportFrame.lua`: paste box plus Import button, hidden after a successful import). Imports/restores (master or no master only) also back up the previous state. JSON is `{"updatedAt": seconds, "modifiers": {name: number}}` and replaces the modifier table; an import whose `updatedAt` is older than the local one is blocked (missing = 0 = oldest; in the future is invalid), and a restore of a backup older than the local data is blocked the same way. Imports and restores adopt the age of the data they bring, never "now". Reset data (`ns.ResetData`) backs up any data, clears all modifiers and sets `updatedAt = 0`, the only way to accept an older import, backup or master; backups are deep copies that carry their `updatedAt`. Manual backups remain until manually removed from SavedVariables; every backup has a required short name for its source (`ns.SaveBackup(name)`: `manual`, `restore`, `import`, `reset`, `sync`, `auto sync`), and backups named `auto sync` (pre-sync backups of automatic checks) are pruned to the newest `ns.MAX_AUTO_BACKUPS` (10) |
 
-TODO for the TOC: replace the placeholder `## Notes:` text (the example in 4.2 shows the intended wording) and consider `## AllowLoadGameType: camelot` (see 4.2).
+TODO for the TOC: consider `## AllowLoadGameType: camelot` (see 4.2).
 
 ## 3. Platform facts (verified against warcraft.wiki.gg, Oct 2026)
 
@@ -60,6 +60,7 @@ Plain text. `## Directive: value` metadata, `# comment`, then a list of files lo
 ## Interface: 16001
 ## Title: Rollover
 ## Notes: Reserve items, roll modifiers and guild modifier tracking for WoW: Forever.
+## IconTexture: Interface\Icons\INV_Misc_Dice_02
 ## Author: Andriod
 ## Version: 0.0.1
 ## SavedVariables: RolloverDB
