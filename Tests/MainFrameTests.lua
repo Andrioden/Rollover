@@ -59,12 +59,16 @@ test("legacy top input, Set and Sync controls are gone", function()
 end)
 
 test("window width fits the table columns", function()
-    -- Margins 14+30, columns 4+150+(2+16+2)+90+4+110+10+60.
-    local requiredWidth = 14 + 4 + 150 + 20 + 90 + 4 + 110 + 10 + 60 + 30
+    -- Margins 14+30, columns 4+16+2+170+2+90+4+110+10+60.
+    local requiredWidth = 14 + 4 + 16 + 2 + 170 + 2 + 90 + 4 + 110 + 10 + 60 + 30
     assert(main.width >= requiredWidth and main.minWidth >= requiredWidth)
-    local classHeader
-    for _, frame in ipairs(f.frames) do if frame.label == "Class" then classHeader = frame end end
-    assert(classHeader.pointArgs[3] == 20 and row.classText.pointArgs[3] == 20)
+    local playerHeader, classHeader
+    for _, frame in ipairs(f.frames) do
+        if frame.label == "Player" then playerHeader = frame end
+        if frame.label == "Class" then classHeader = frame end
+    end
+    assert(playerHeader.pointArgs[1] == 22)
+    assert(classHeader.pointArgs[3] == 2 and row.classText.pointArgs[3] == 2)
 end)
 
 test("crowns are bright for the publisher and dim for others", function()
@@ -73,6 +77,8 @@ test("crowns are bright for the publisher and dim for others", function()
     f.initRow(rowB, main.scrollBox.data[2])
     assert(rowA.key == "Publisher" and rowB.key == "Follower")
     crownA, crownB = rowA.publisherButton, rowB.publisherButton
+    assert(crownA.pointArgs[1] == rowA and crownA.pointArgs[2] == "LEFT" and crownA.pointArgs[3] == 4)
+    assert(rowA.nameText.pointArgs[1] == crownA and rowA.nameText.pointArgs[2] == "RIGHT")
     assert(crownA.icon.desaturated and crownA.icon.alpha < 1)
     assert(not crownB.icon.desaturated and crownB.icon.alpha == 1)
     assert(crownA.glow == nil and crownB.glow == nil)

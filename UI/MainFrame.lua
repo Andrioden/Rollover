@@ -4,12 +4,11 @@ local frame
 
 local NAME_WIDTH, CLASS_WIDTH, RANK_WIDTH, MOD_WIDTH = 170, 90, 110, 60
 local PUBLISHER_SIZE, PUBLISHER_GAP = 16, 2
--- Gap between the name column and the class column; the publisher button sits inside it.
-local CLASS_OFFSET = PUBLISHER_GAP * 2 + PUBLISHER_SIZE
+local CLASS_OFFSET = PUBLISHER_GAP
 local ROW_HEIGHT = 22
 -- Row content is 468 wide (+44 for margins and scrollbar); the defaults keep a little slack.
 local FRAME_WIDTH, FRAME_HEIGHT = 520, 400
-local MIN_WIDTH, MIN_HEIGHT = 500, 250
+local MIN_WIDTH, MIN_HEIGHT = 512, 250
 local MAX_WIDTH, MAX_HEIGHT = 900, 1500
 
 local sortKey, sortAscending = "rank", true
@@ -17,16 +16,10 @@ local headers = {}
 
 local function InitRow(row, data)
     if not row.nameText then
-        -- Player name column.
-        row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        row.nameText:SetPoint("LEFT", 4, 0)
-        row.nameText:SetWidth(NAME_WIDTH)
-        row.nameText:SetJustifyH("LEFT")
-
         -- Publisher selection column.
         local publisher = CreateFrame("Button", nil, row)
         publisher:SetSize(PUBLISHER_SIZE, PUBLISHER_SIZE)
-        publisher:SetPoint("LEFT", row.nameText, "RIGHT", PUBLISHER_GAP, 0)
+        publisher:SetPoint("LEFT", row, "LEFT", 4, 0)
         publisher.icon = publisher:CreateTexture(nil, "ARTWORK")
         publisher.icon:SetAllPoints()
         publisher.icon:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
@@ -39,6 +32,12 @@ local function InitRow(row, data)
         end)
         publisher:SetScript("OnLeave", GameTooltip_Hide)
         row.publisherButton = publisher
+
+        -- Player name column.
+        row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.nameText:SetPoint("LEFT", publisher, "RIGHT", PUBLISHER_GAP, 0)
+        row.nameText:SetWidth(NAME_WIDTH)
+        row.nameText:SetJustifyH("LEFT")
 
         -- Class column.
         row.classText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -211,7 +210,7 @@ local function CreateMainFrame()
     header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -30, -62)
     header:SetHeight(18)
     local nameHeader = CreateHeader(header, "name", "Player", NAME_WIDTH, "LEFT")
-    nameHeader:SetPoint("LEFT", 4, 0)
+    nameHeader:SetPoint("LEFT", 4 + PUBLISHER_SIZE + PUBLISHER_GAP, 0)
     local classHeader = CreateHeader(header, "class", "Class", CLASS_WIDTH, "LEFT")
     classHeader:SetPoint("LEFT", nameHeader, "RIGHT", CLASS_OFFSET, 0)
     local rankHeader = CreateHeader(header, "rank", "Rank", RANK_WIDTH, "LEFT")
