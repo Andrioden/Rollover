@@ -192,10 +192,33 @@ function MockClient.new(root)
 
     local function last(c) return c.prints[#c.prints] or "" end
     local function printedSince(c, mark) return table.concat(c.prints, "\n", mark + 1) end
-    local function count(c, text)
+    local function count(c, text, mark)
         local total = 0
-        for _, line in ipairs(c.prints) do if line:find(text, 1, true) then total = total + 1 end end
+        for i = (mark or 0) + 1, #c.prints do
+            if c.prints[i]:find(text, 1, true) then total = total + 1 end
+        end
         return total
+    end
+
+    -- Prints a header, then one PASS line per test; a failing test prints FAIL and stops the run.
+    local function suite(title)
+        print(title)
+        return function(name, body)
+            local ok, err = xpcall(body, debug.traceback)
+            if not ok then
+                print("  FAIL: " .. name)
+                error(err, 0)
+            end
+            print("  PASS: " .. name)
+        end
+    end
+
+    -- Requests a sync and returns the request ID the addon generated (<server time>-<per-client sequence>).
+    local sequences = setmetatable({}, { __mode = "k" })
+    local function requestSync(c)
+        if not c.ns.RequestSync() then return nil end
+        sequences[c] = (sequences[c] or 0) + 1
+        return string.format("%d-%d", c.env.GetServerTime(), sequences[c])
     end
 
     return {
@@ -205,7 +228,9 @@ function MockClient.new(root)
         delivered = delivered,
         last = last,
         printedSince = printedSince,
+        requestSync = requestSync,
         secret = secret,
+        suite = suite,
     }
 end
 

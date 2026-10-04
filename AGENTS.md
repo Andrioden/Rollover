@@ -207,7 +207,7 @@ Every file gets `local addonName, ns = ...` - the **same `ns` table** for all fi
 - Simulate restrictions: CVars `addonChatRestrictionsForced`, `addonCombatRestrictionsForced`, `addonMapRestrictionsForced`, `addonEncounterRestrictionsForced`, `addonPvPMatchRestrictionsForced`, `addonChallengeModeRestrictionsForced` (set to 1; not persisted across restarts).
 - Editor setup: VS Code + **Lua** extension (sumneko) for IntelliSense; the **WoW API** extension (Ketho) adds WoW API definitions. Reference Blizzard code: `wow-ui-source` (`forever` branch) and [Ketho/BlizzardInterfaceResources](https://github.com/Ketho/BlizzardInterfaceResources).
 - Testing multi-player features (comms, guild sync) needs at least two clients/accounts; use `"WHISPER"` to yourself to smoke-test comm code.
-- Regression tests: `Tests\StateSync.lua` runs sectioned scenarios outside the game using the shared WoW API/client mock in `Tests\MockClient.lua` (timers, frames and message delivery): `lua .\Tests\StateSync.lua .` from the addon folder, or `npm exec --yes --package=fengari-node-cli -- fengari .\Tests\StateSync.lua .` without a Lua install. Test roster fixtures use plain character names, matching Forever roster data. Mocks do not prove real client behavior (JSON parsing, menu layout, whisper sender format); verify those in game.
+- Regression tests: one suite per area (`Tests\DBTests.lua`, `ImportExportTests.lua`, `GuildSyncTests.lua`, `MainFrameTests.lua`, `EventsTests.lua`) run outside the game using the shared WoW API/client mock in `Tests\MockClient.lua` (timers, frames and message delivery). Each suite creates its own mock harness and prints one `PASS`/`FAIL` line per `test(name, fn)` (via `harness.suite`). Run all with `lua .\Tests\RolloverTests.lua .` from the addon folder (or `npm exec --yes --package=fengari-node-cli -- fengari .\Tests\RolloverTests.lua .` without a Lua install); a single suite runs standalone, e.g. `lua .\Tests\GuildSyncTests.lua .`. Add new suites to the list in `RolloverTests.lua`; use `harness.requestSync(client)` to start a sync and get its request ID. Test roster fixtures use plain character names, matching Forever roster data. Mocks do not prove real client behavior (JSON parsing, menu layout, whisper sender format); verify those in game.
 - Do not commit `WTF/` data or screenshots; the repo is only this addon folder.
 
 ## 6. Coding conventions for this repo
@@ -244,7 +244,12 @@ UI\RollFrame.lua        -- roll-for-item popup (ns.ShowRollFrame(link)); Core\DB
 Core\Commands.lua       -- /rollover slash command dispatch
 Core\Events.lua         -- ADDON_LOADED (ns.InitDB, ns.InitGuildSync, event registration), CHAT_MSG_ADDON, guild roster/guild changes -> sync context check + visible roster refresh
 Tests\MockClient.lua    -- shared mocked WoW client/API wiring for standalone tests (not loaded by TOC)
-Tests\StateSync.lua     -- sectioned state-sync, UI, import/export and event regression scenarios
+Tests\RolloverTests.lua -- runner for all suites below (not loaded by TOC)
+Tests\DBTests.lua       -- Core\DB.lua: modifiers, backups, publisher/edit permissions, name resolution
+Tests\ImportExportTests.lua -- JSON import/export plus export/import/debug windows
+Tests\GuildSyncTests.lua    -- Modules\GuildSync.lua: streaming, protocol guards, retries, failures
+Tests\MainFrameTests.lua    -- UI\MainFrame.lua: roster rows, crowns, Tools menu
+Tests\EventsTests.lua       -- Core\Events.lua: event registration
 Modules\Reserves.lua    -- planned: reserve data model + rules
 Modules\Modifiers.lua   -- planned: modifier rules and calculations for rolls
 Modules\Rolls.lua       -- planned: roll detection/parsing/ranking, announcements
