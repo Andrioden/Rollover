@@ -32,6 +32,7 @@ ns.L = {
     SYNC_FROM_MASTER = "Sync from master",
     CANCEL_SYNC = "Cancel sync",
     SYNC_CANCELLED = "Sync cancelled.",
+    SYNC_MASTER_OFFLINE = "Sync not initiated: master %s is offline.",
     NO_GUILD = "Guild roster unavailable. Open the roster and try again.",
     UNKNOWN_PLAYER = "That player is not in the current guild roster.",
     READ_ONLY = "Only the master can edit modifiers. Set yourself as master to edit.",

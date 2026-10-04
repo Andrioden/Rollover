@@ -14,6 +14,7 @@ local test = harness.suite("Sync master and follower together")
 local p, f = client("Master"), client("Follower")
 assert(p.ns.SelectMaster("Master") and p.ns.SetModifier("Master", 12.5) and p.ns.SetModifier("FormerMember", -4))
 assert(f.ns.SelectMaster("Master"))
+f.online.Master = true
 
 test("a manual sync streams modifiers and roster zeros, printing progress but no names", function()
     local mark = #f.prints
@@ -61,7 +62,9 @@ test("realm-less 'First Last' names sync", function()
     local rp, rf = client("Andriod En"), client("Other Player")
     for _, c in ipairs({ rp, rf }) do c.roster = { "Andriod En", "Other Player", "Third Guy" } end
     assert(rp.ns.SelectMaster("Andriod En") and rp.ns.SetModifier("Andriod En", 220) and rp.ns.SetModifier("Other Player", -3))
-    assert(rf.ns.SelectMaster("Andriod En") and requestSync(rf))
+    assert(rf.ns.SelectMaster("Andriod En"))
+    rf.online["Andriod En"], rp.online["Other Player"] = true, true
+    assert(requestSync(rf))
     advance(20)
     assert(last(rf):find("Synced 3 modifiers from Andriod En", 1, true))
     assert(rf.ns.GetModifier("Andriod En") == 220 and rf.ns.GetPlayerModifier() == -3 and rf.ns.db.modifiers["Third Guy"] == 0)
@@ -73,6 +76,7 @@ test("large rosters arrive over several VALUE messages", function()
     for i = 1, 98 do roster[#roster + 1] = string.format("Guild Member Number %03d", i) end
     bp.roster, bf.roster = roster, roster
     assert(bp.ns.SelectMaster("Big Master") and bf.ns.SelectMaster("Big Master"))
+    bf.online["Big Master"] = true
     for i = 3, #roster do assert(bp.ns.SetModifier(roster[i], i * 1.5)) end
     local mark = #delivered
     assert(requestSync(bf))

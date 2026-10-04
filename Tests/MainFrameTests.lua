@@ -3,7 +3,7 @@
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
 local harness = require("Tests.MockClient").new(root)
-local advance, client = harness.advance, harness.client
+local advance, client, delivered = harness.advance, harness.client, harness.delivered
 local test = harness.suite("UI\\MainFrame.lua")
 
 local p, f = client("Master"), client("Follower")
@@ -101,8 +101,17 @@ test("Reset data asks for confirmation first", function()
     assert(f.ns.GetModifier("Master") == 0)
 end)
 
+test("Sync from master is not initiated while the master is offline", function()
+    advance(35)
+    local mark = #delivered
+    menu()[f.ns.L.SYNC_FROM_MASTER].action()
+    assert(not f.ns.IsSyncPending() and #delivered == mark)
+    assert(f.prints[#f.prints]:find("Sync not initiated: master Master is offline.", 1, true))
+end)
+
 test("while receiving, Sync becomes Cancel and master changes are locked", function()
     advance(35)
+    f.online.Master = true
     menu()[f.ns.L.SYNC_FROM_MASTER].action()
     assert(f.ns.IsSyncPending() and not row(1).masterButton.enabled)
     local entries = menu()

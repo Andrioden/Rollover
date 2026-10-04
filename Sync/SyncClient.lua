@@ -132,7 +132,12 @@ function ns.RequestSync()
     if not source then ns.Print(ns.L.SELECT_MASTER); return false end
     if ns.IsMaster() then ns.Print(ns.L.LOCAL_MASTER); return false end
     if not IsInGuild() then ns.Print(ns.L.NO_GUILD); return false end
-    if not ns.ResolveGuildMember(source) then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
+    local member = ns.ResolveGuildMember(source)
+    if not member then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
+    if ns.IsGuildMemberOnline(member) ~= true then
+        ns.Print(string.format(ns.L.SYNC_MASTER_OFFLINE, member))
+        return false
+    end
     if Sync.QueueLength() >= MAX_QUEUE then ns.Print(ns.L.BUSY); return false end
     StartRequest(false, 1)
     ns.Print(string.format(ns.L.REQUESTING, source))

@@ -9,9 +9,11 @@ local delivered, secret, requestSync = harness.delivered, harness.secret, harnes
 local backupCount, messagesFrom = harness.backupCount, harness.messagesFrom
 local test = harness.suite("Sync\\SyncClient.lua")
 
--- The master stays offline, so selecting it sends nothing; tests start their own requests.
+-- The master is offline while selected, so selecting it sends nothing; it comes online afterwards
+-- and tests start their own requests.
 local f = client("Follower")
 assert(f.ns.SelectMaster("Master") and not f.ns.IsSyncPending())
+f.online.Master = true
 
 local function reply(id, message)
     f.ns.OnSyncMessage("Rollover", (message:gsub("{id}", id)), "WHISPER", "Master")
