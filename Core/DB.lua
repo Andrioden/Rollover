@@ -3,12 +3,14 @@ local addonName, ns = ...
 local DB_VERSION = 1
 local MAX_JSON_BYTES = 200000
 ns.MAX_MEMBERS = 1000
+ns.MAX_AUTO_BACKUPS = 10
+local AUTO_TAG = " (auto)"
 
 local defaults = {
     version = DB_VERSION,
     modifiers = {}, -- [guild roster name] = number
     backups = {}, -- [date-time] = copy of modifiers
-    sync = {}, -- { publisher = guild roster name }
+    sync = {}, -- { publisher = guild roster name, updatedAt = publisher server time of the last change }
 }
 
 function ns.InitDB()
@@ -62,6 +64,15 @@ function ns.ResolveGuildMember(input)
     if not ambiguous then return found end
 end
 
+-- True/false for a member in the current roster, nil when the member is not in it.
+function ns.IsGuildMemberOnline(name)
+    if not IsInGuild() then return end
+    for i = 1, GetNumGuildMembers() do
+        local rosterName, _, _, _, _, _, _, _, isOnline = GetGuildRosterInfo(i)
+        if rosterName == name then return isOnline and true or false end
+    end
+end
+
 function ns.IsPublisher()
     local player = ns.ResolveGuildMember(ns.GetPlayerName())
     return player ~= nil and ns.db.sync.publisher == player
@@ -71,24 +82,50 @@ function ns.CanEditModifiers()
     return (not ns.db.sync.publisher or ns.IsPublisher()) and not ns.IsSyncPending()
 end
 
+-- Followers compare this value with the publisher's, never with their own clock. It always increases.
+function ns.TouchModifiers()
+    ns.db.sync.updatedAt = math.max(GetServerTime(), (ns.db.sync.updatedAt or 0) + 1)
+end
+
 function ns.SetModifier(name, value)
     if not ns.CanEditModifiers() then ns.Print(ns.L.READ_ONLY); return false end
     if not ns.IsValidMemberName(name) then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
     if not ns.IsValidModifier(value) then ns.Print(ns.L.INVALID_MODIFIER); return false end
-    ns.db.modifiers[name] = value
+    if ns.db.modifiers[name] ~= value then
+        ns.db.modifiers[name] = value
+        ns.TouchModifiers()
+    end
     return true
 end
 
-function ns.SaveBackup()
-    local base = date("%Y-%m-%d %H:%M:%S")
+-- Only automatic (tagged) backups are pruned, oldest first; manual ones stay until removed by hand.
+local function PruneAutoBackups()
+    local keys = {}
+    for key in pairs(ns.db.backups) do
+        if key:find(AUTO_TAG, 1, true) then keys[#keys + 1] = key end
+    end
+    table.sort(keys, function(a, b) return a > b end)
+    for i = ns.MAX_AUTO_BACKUPS + 1, #keys do ns.db.backups[keys[i]] = nil end
+end
+
+function ns.SaveBackup(auto)
+    local base = date("%Y-%m-%d %H:%M:%S") .. (auto == true and AUTO_TAG or "")
     local key, suffix = base, 1
     while ns.db.backups[key] do
         suffix = suffix + 1
         key = base .. " (" .. suffix .. ")"
     end
     ns.db.backups[key] = CopyTable(ns.db.modifiers)
+    if auto == true then PruneAutoBackups() end
     ns.Print(string.format(ns.L.BACKUP_SAVED, key))
     return key
+end
+
+-- Followers must not diverge from their publisher; select yourself as publisher to edit locally.
+function ns.CanReplaceModifiers()
+    if ns.IsSyncPending() then ns.Print(ns.L.BUSY); return false end
+    if ns.db.sync.publisher and not ns.IsPublisher() then ns.Print(ns.L.FOLLOWER_LOCKED); return false end
+    return true
 end
 
 function ns.ValidateModifierState(state)
@@ -105,11 +142,12 @@ function ns.ValidateModifierState(state)
 end
 
 function ns.RestoreBackup(key)
-    if ns.IsSyncPending() then ns.Print(ns.L.BUSY); return false end
+    if not ns.CanReplaceModifiers() then return false end
     local backup = ns.db.backups[key]
     if not backup then ns.Print(ns.L.BACKUP_MISSING); return false end
     ns.SaveBackup()
     ns.db.modifiers = CopyTable(backup)
+    ns.TouchModifiers()
     ns.RefreshRoster()
     ns.Print(string.format(ns.L.BACKUP_RESTORED, key))
     return true
@@ -127,7 +165,7 @@ function ns.ExportModifiers()
 end
 
 function ns.ImportModifiers(text)
-    if ns.IsSyncPending() then ns.Print(ns.L.BUSY); return false end
+    if not ns.CanReplaceModifiers() then return false end
     if not C_EncodingUtil or not C_EncodingUtil.DeserializeJSON then
         ns.Print(ns.L.JSON_UNAVAILABLE)
         return false
@@ -144,6 +182,7 @@ function ns.ImportModifiers(text)
     if not valid then ns.Print(message); return false end
     ns.SaveBackup()
     ns.db.modifiers = state
+    ns.TouchModifiers()
     ns.RefreshRoster()
     ns.Print(ns.L.IMPORTED)
     return true

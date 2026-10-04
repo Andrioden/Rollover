@@ -7,7 +7,6 @@ local client = harness.client
 local test = harness.suite("Import/export and text windows")
 
 local f = client("Follower")
-f.ns.SelectPublisher("Publisher")
 local exportFrame, importFrame
 
 test("import rejects invalid JSON and keeps current data", function()
@@ -21,7 +20,7 @@ test("import rejects invalid JSON and keeps current data", function()
     assert(f.ns.GetModifier("OldMember") == 42)
 end)
 
-test("import replaces the modifier table (followers may import)", function()
+test("import replaces the modifier table (no publisher selected)", function()
     assert(f.ns.ImportModifiers('{"Publisher":7,"ZeroMember":0}'))
     assert(f.ns.GetModifier("Publisher") == 7 and f.ns.GetModifier("OldMember") == 0)
 end)

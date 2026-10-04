@@ -129,9 +129,9 @@ local function ShowTools(button)
         root:CreateButton(ns.L.BACKUP, ns.SaveBackup)
         root:CreateButton(ns.L.EXPORT, ns.ExportModifiers)
         local import = root:CreateButton(ns.L.IMPORT, ns.ShowImportFrame)
-        import:SetEnabled(not ns.IsSyncPending())
+        import:SetEnabled(ns.CanEditModifiers())
         local restore = root:CreateButton(ns.L.RESTORE)
-        restore:SetEnabled(not ns.IsSyncPending())
+        restore:SetEnabled(ns.CanEditModifiers())
         local keys = {}
         for key in pairs(ns.db.backups) do keys[#keys + 1] = key end
         table.sort(keys, function(a, b) return a > b end)

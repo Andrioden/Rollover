@@ -44,8 +44,9 @@ function MockClient.new(root)
         env.GetNormalizedRealmName = function() return "Realm" end
         env.GetNumGuildMembers = function() return #c.roster end
         c.roster = { "Publisher", "Follower", "ZeroMember", "ThirdMember" }
+        c.online = {} -- [roster name] = true; members are offline unless a test says otherwise
         env.GetGuildRosterInfo = function(index)
-            return c.roster[index], "Member", index, nil, nil, nil, nil, nil, nil, nil, "MAGE"
+            return c.roster[index], "Member", index, nil, nil, nil, nil, nil, c.online[c.roster[index]], nil, "MAGE"
         end
         env.LOCALIZED_CLASS_NAMES_MALE = { MAGE = "Mage" }
         env.RAID_CLASS_COLORS = {}

@@ -12,9 +12,15 @@ events:SetScript("OnEvent", function(self, event, ...)
         self:RegisterEvent("CHAT_MSG_ADDON")
         self:RegisterEvent("PLAYER_GUILD_UPDATE")
         self:RegisterEvent("GUILD_ROSTER_UPDATE")
+        self:RegisterEvent("PLAYER_ENTERING_WORLD")
     elseif event == "CHAT_MSG_ADDON" then
         ns.OnSyncMessage(...)
-    elseif event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        ns.OnPlayerEnteringWorld(...)
+    elseif event == "GUILD_ROSTER_UPDATE" then
+        ns.OnGuildRosterUpdate()
+        ns.RefreshRoster()
+    elseif event == "PLAYER_GUILD_UPDATE" then
         ns.OnSyncContextChanged()
         ns.RefreshRoster()
     end

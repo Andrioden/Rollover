@@ -35,15 +35,17 @@ test("streams modifiers and missing roster zeros, with progress output", functio
 end)
 
 test("sync keeps a pre-sync backup that can be restored", function()
-    f.ns.db.modifiers = { OldMember = 42 }
+    f.ns.db.modifiers = { OldMember = 43 }
+    local function findBackup()
+        for key, state in pairs(f.ns.db.backups) do if state.OldMember == 43 then return key end end
+    end
     assert(requestSync(f))
-    local before
-    for key, state in pairs(f.ns.db.backups) do if state.OldMember == 42 then before = key end end
-    assert(before)
+    assert(not findBackup()) -- taken when the stream begins, not when the request is sent
     advance(1.1)
+    local before = findBackup()
+    assert(before and not before:find("(auto)", 1, true))
     assert(not f.ns.IsSyncPending() and f.ns.GetModifier("OldMember") == 0)
-    assert(f.ns.db.backups[before].OldMember == 42)
-    assert(f.ns.RestoreBackup(before) and f.ns.GetModifier("OldMember") == 42)
+    assert(not f.ns.RestoreBackup(before) and f.ns.GetModifier("OldMember") == 0) -- followers cannot restore
     advance(35)
 end)
 
@@ -58,9 +60,9 @@ test("protocol guards reject spoofed, secret and mismatched messages", function(
     f.ns.db.modifiers = { OldMember = 42 }
     local id = requestSync(f)
     assert(id)
-    f.ns.OnSyncMessage("Rollover", "1\tBEGIN\t" .. id .. "\t1", "WHISPER", "ThirdMember")
+    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t1\t5", "WHISPER", "ThirdMember")
     f.ns.OnSyncMessage("Rollover", secret, "WHISPER", "Publisher")
-    f.ns.OnSyncMessage("Rollover", "1\tBEGIN\twrong\t1", "WHISPER", "Publisher")
+    f.ns.OnSyncMessage("Rollover", "BEGIN\twrong\t1\t5", "WHISPER", "Publisher")
     assert(f.ns.GetModifier("OldMember") == 42)
     f.ns.CancelSync()
     advance(35)
@@ -69,10 +71,10 @@ end)
 test("incomplete transfer ends with a 'may be incomplete' warning", function()
     f.ns.db.modifiers = { OldMember = 42 }
     local id = requestSync(f)
-    f.ns.OnSyncMessage("Rollover", "1\tBEGIN\t" .. id .. "\t2", "WHISPER", "Publisher")
-    f.ns.OnSyncMessage("Rollover", "1\tVALUE\t" .. id .. "\t1\tPublisher\t-7", "WHISPER", "Publisher")
+    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t5", "WHISPER", "Publisher")
+    f.ns.OnSyncMessage("Rollover", "VALUE\t" .. id .. "\t1\tPublisher\t-7", "WHISPER", "Publisher")
     assert(f.ns.GetModifier("Publisher") == -7)
-    f.ns.OnSyncMessage("Rollover", "1\tEND\t" .. id .. "\t2", "WHISPER", "Publisher")
+    f.ns.OnSyncMessage("Rollover", "END\t" .. id .. "\t2", "WHISPER", "Publisher")
     assert(not f.ns.IsSyncPending() and f.ns.GetModifier("Publisher") == -7)
     assert(last(f):find("may be incomplete", 1, true))
     advance(35)
@@ -184,7 +186,7 @@ test("large rosters are packed into several VALUE messages", function()
     advance(10)
     assert(not bf.ns.IsSyncPending() and last(bf):find("Synced 100 modifiers from Big Publisher", 1, true))
     for i = deliveredBefore + 1, #delivered do
-        if delivered[i].text:find("\tVALUE\t", 1, true) then valueMessages = valueMessages + 1 end
+        if delivered[i].text:find("VALUE\t", 1, true) == 1 then valueMessages = valueMessages + 1 end
     end
     assert(valueMessages > 1 and valueMessages < 30, valueMessages)
     assert(count(bf, "Synced ", mark) - 1 == valueMessages and bf.ns.GetModifier(bigRoster[100]) == 150)
@@ -196,8 +198,8 @@ test("a duplicate name inside one packed VALUE fails the transfer", function()
     local mark = #bf.prints
     local id = requestSync(bf)
     assert(id)
-    bf.ns.OnSyncMessage("Rollover", "1\tBEGIN\t" .. id .. "\t2", "WHISPER", "Big Publisher")
-    bf.ns.OnSyncMessage("Rollover", "1\tVALUE\t" .. id .. "\t1\tBig Follower\t1\tBig Follower\t2", "WHISPER", "Big Publisher")
+    bf.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t5", "WHISPER", "Big Publisher")
+    bf.ns.OnSyncMessage("Rollover", "VALUE\t" .. id .. "\t1\tBig Follower\t1\tBig Follower\t2", "WHISPER", "Big Publisher")
     assert(not bf.ns.IsSyncPending() and printedSince(bf, mark):find("Invalid or incomplete", 1, true))
 end)
 
