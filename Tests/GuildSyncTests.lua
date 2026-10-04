@@ -22,8 +22,9 @@ test("streams modifiers and missing roster zeros, with progress output", functio
     advance(1)
     assert(not f.ns.IsSyncPending())
     local output = printedSince(f, syncMark)
-    -- All five entries fit in one VALUE message and are listed together.
-    assert(output:find("Received 5/5: Follower (0), FormerMember (-4), Master (+12.5), ThirdMember (0), ZeroMember (0)", 1, true))
+    -- All five entries fit in one VALUE message; only the progress count is printed.
+    assert(output:find("Received 5/5", 1, true))
+    assert(not output:find("FormerMember", 1, true))
     assert(output:find("Requesting modifiers from Master", 1, true))
     assert(output:find("Receiving 5 modifiers from Master", 1, true))
     assert(output:find("Synced 5 modifiers from Master", 1, true))
@@ -198,7 +199,7 @@ test("large rosters are packed into several VALUE messages", function()
     end
     assert(valueMessages > 1 and valueMessages < 30, valueMessages)
     assert(count(bf, "Received ", mark) == valueMessages and bf.ns.GetModifier(bigRoster[100]) == 150)
-    assert(printedSince(bf, mark):find("Received 100/100:", 1, true))
+    assert(printedSince(bf, mark):find("Received 100/100", 1, true))
 end)
 
 test("a duplicate name inside one packed VALUE fails the transfer", function()

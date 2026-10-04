@@ -110,10 +110,6 @@ Pump = function()
     if #queue > 0 then Schedule(SEND_INTERVAL) end
 end
 
-local function FormatEntry(name, value)
-    return string.format("%s (%s)", name, value > 0 and "+" .. value or tostring(value))
-end
-
 function ns.IsSyncPending()
     return pending ~= nil
 end
@@ -397,13 +393,9 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
             seen[name] = true
             entries[#entries + 1] = { name = name, value = value }
         end
-        local labels = {}
-        for _, entry in ipairs(entries) do
-            pending.modifiers[entry.name] = entry.value
-            labels[#labels + 1] = FormatEntry(entry.name, entry.value)
-        end
+        for _, entry in ipairs(entries) do pending.modifiers[entry.name] = entry.value end
         pending.received = last
-        ns.Print(string.format(ns.L.RECEIVED_ENTRIES, last, pending.count, table.concat(labels, ", ")))
+        ns.Print(string.format(ns.L.RECEIVED_ENTRIES, last, pending.count))
     elseif fields[1] == "END" then
         local count = #fields == 3 and Integer(fields[3], MAX_MEMBERS)
         if not pending.count or count ~= pending.count or pending.received ~= count then
