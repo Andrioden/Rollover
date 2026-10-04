@@ -20,7 +20,7 @@ end
 
 local function autoBackups(c)
     local total = 0
-    for key in pairs(c.ns.db.backups) do if key:find("(auto)", 1, true) then total = total + 1 end end
+    for key in pairs(c.ns.db.backups) do if c.ns.db.backups[key].name == "auto sync" then total = total + 1 end end
     return total
 end
 

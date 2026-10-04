@@ -411,7 +411,7 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
             return
         end
         -- The backup is taken right before the local table is replaced.
-        ns.SaveBackup(pending.auto)
+        ns.SaveBackup(pending.auto and "auto sync" or "sync")
         ns.db.modifiers = pending.modifiers
         ns.db.sync.updatedAt = pending.updatedAt
         pending = nil

@@ -15,8 +15,19 @@ test("modifiers reject non-finite values", function()
     assert(p.ns.GetModifier("Master") == 12.5)
 end)
 
+test("a backup requires a name and keeps it", function()
+    assert(not pcall(p.ns.SaveBackup) and not pcall(p.ns.SaveBackup, ""))
+    local key = p.ns.SaveBackup("manual")
+    assert(p.ns.db.backups[key].name == "manual" and last(p):find("(manual)", 1, true))
+    local restored = p.ns.db.backups[key].updatedAt
+    assert(p.ns.RestoreBackup(key) and restored)
+    local names = {}
+    for _, backup in pairs(p.ns.db.backups) do names[backup.name] = true end
+    assert(names.restore, "restoring names the pre-restore backup")
+end)
+
 test("backups are independent copies and restorable", function()
-    local backup1, backup2 = p.ns.SaveBackup(), p.ns.SaveBackup()
+    local backup1, backup2 = p.ns.SaveBackup("manual"), p.ns.SaveBackup("manual")
     assert(backup1 ~= backup2)
     local stamp = p.ns.GetUpdatedAt()
     assert(p.ns.db.backups[backup1].updatedAt == stamp and p.ns.db.backups[backup1].modifiers.Master == 12.5)
@@ -49,7 +60,7 @@ test("only real edits bump updatedAt; restore and import keep the age of their d
     stamp = p.ns.db.sync.updatedAt
     assert(p.ns.SetModifier("Master", 14) and p.ns.db.sync.updatedAt > stamp) -- same server second
     stamp = p.ns.db.sync.updatedAt
-    assert(p.ns.RestoreBackup(p.ns.SaveBackup()) and p.ns.db.sync.updatedAt == stamp)
+    assert(p.ns.RestoreBackup(p.ns.SaveBackup("manual")) and p.ns.db.sync.updatedAt == stamp)
     advance(10) -- rapid test edits pushed the stamp past the server clock; imports may not be from the future
     local json = '{"updatedAt":' .. stamp .. ',"modifiers":{"Master":7,"ZeroMember":0}}'
     assert(p.ns.ImportModifiers(json) and p.ns.db.sync.updatedAt == stamp)
@@ -58,7 +69,7 @@ test("only real edits bump updatedAt; restore and import keep the age of their d
 end)
 
 test("restoring an older backup is blocked until the data is reset", function()
-    local target = p.ns.SaveBackup()
+    local target = p.ns.SaveBackup("manual")
     local old = p.ns.GetUpdatedAt()
     assert(p.ns.SetModifier("Master", 41) and p.ns.GetUpdatedAt() > old)
     local backups, stamp = 0, p.ns.GetUpdatedAt()
@@ -81,7 +92,7 @@ test("restoring a backup saves the current state as a new backup first", functio
     assert(p.ns.SetModifier("Master", 31))
     local before = {}
     for key in pairs(p.ns.db.backups) do before[key] = true end
-    local target = p.ns.SaveBackup()
+    local target = p.ns.SaveBackup("manual")
     p.ns.db.modifiers.Master = 32 -- same age, different content
     assert(p.ns.RestoreBackup(target))
     local added
@@ -126,7 +137,7 @@ test("selecting a master never changes the age of the data", function()
 end)
 
 test("followers cannot import or restore", function()
-    local backup = f.ns.SaveBackup()
+    local backup = f.ns.SaveBackup("manual")
     assert(not f.ns.ImportModifiers("{}") and last(f):find(f.ns.L.FOLLOWER_LOCKED, 1, true))
     assert(not f.ns.RestoreBackup(backup) and last(f):find(f.ns.L.FOLLOWER_LOCKED, 1, true))
 end)
@@ -134,11 +145,11 @@ end)
 test("only automatic backups are pruned, keeping the newest ones", function()
     local seconds = 0
     p.env.date = function() seconds = seconds + 1; return string.format("2026-10-04 12:00:%02d", seconds) end
-    local manual = p.ns.SaveBackup()
-    local first = p.ns.SaveBackup(true)
-    for _ = 1, p.ns.MAX_AUTO_BACKUPS do p.ns.SaveBackup(true) end
+    local manual = p.ns.SaveBackup("manual")
+    local first = p.ns.SaveBackup("auto sync")
+    for _ = 1, p.ns.MAX_AUTO_BACKUPS do p.ns.SaveBackup("auto sync") end
     local autoCount = 0
-    for key in pairs(p.ns.db.backups) do if key:find("(auto)", 1, true) then autoCount = autoCount + 1 end end
+    for key in pairs(p.ns.db.backups) do if p.ns.db.backups[key].name == "auto sync" then autoCount = autoCount + 1 end end
     assert(autoCount == p.ns.MAX_AUTO_BACKUPS)
     assert(p.ns.db.backups[manual] and not p.ns.db.backups[first])
 end)

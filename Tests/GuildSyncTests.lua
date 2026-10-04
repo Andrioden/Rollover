@@ -43,7 +43,7 @@ test("sync keeps a pre-sync backup that can be restored", function()
     assert(not findBackup()) -- taken when the stream completes, not when the request is sent
     advance(1.1)
     local before = findBackup()
-    assert(before and not before:find("(auto)", 1, true))
+    assert(before and f.ns.db.backups[before].name == "sync")
     assert(not f.ns.IsSyncPending() and f.ns.GetModifier("OldMember") == 0)
     assert(not f.ns.RestoreBackup(before) and f.ns.GetModifier("OldMember") == 0) -- followers cannot restore
     advance(35)

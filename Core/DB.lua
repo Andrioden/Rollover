@@ -4,12 +4,11 @@ local DB_VERSION = 1
 local MAX_JSON_BYTES = 200000
 ns.MAX_MEMBERS = 1000
 ns.MAX_AUTO_BACKUPS = 10
-local AUTO_TAG = " (auto)"
 
 local defaults = {
     version = DB_VERSION,
     modifiers = {}, -- [guild roster name] = number
-    backups = {}, -- [date-time] = copy of modifiers
+    backups = {}, -- [date-time] = { name, updatedAt, modifiers }
     -- master = guild roster name; updatedAt = server time of the last real change to the modifiers,
     -- carried along with the data itself (0 or nil = no known age, e.g. after a reset)
     sync = {},
@@ -105,26 +104,28 @@ function ns.SetModifier(name, value)
     return true
 end
 
--- Only automatic (tagged) backups are pruned, oldest first; manual ones stay until removed by hand.
+-- Only automatic sync backups are pruned, oldest first; the others stay until removed by hand.
 local function PruneAutoBackups()
     local keys = {}
     for key in pairs(ns.db.backups) do
-        if key:find(AUTO_TAG, 1, true) then keys[#keys + 1] = key end
+        if ns.db.backups[key].name == "auto sync" then keys[#keys + 1] = key end
     end
     table.sort(keys, function(a, b) return a > b end)
     for i = ns.MAX_AUTO_BACKUPS + 1, #keys do ns.db.backups[keys[i]] = nil end
 end
 
-function ns.SaveBackup(auto)
-    local base = date("%Y-%m-%d %H:%M:%S") .. (auto == true and AUTO_TAG or "")
+-- name is a short label for the source of the backup (manual, restore, import, reset, sync, ...).
+function ns.SaveBackup(name)
+    assert(type(name) == "string" and name ~= "", "a backup needs a name")
+    local base = date("%Y-%m-%d %H:%M:%S")
     local key, suffix = base, 1
     while ns.db.backups[key] do
         suffix = suffix + 1
         key = base .. " (" .. suffix .. ")"
     end
-    ns.db.backups[key] = { updatedAt = ns.GetUpdatedAt(), modifiers = CopyTable(ns.db.modifiers) }
-    if auto == true then PruneAutoBackups() end
-    ns.Print(string.format(ns.L.BACKUP_SAVED, key))
+    ns.db.backups[key] = { name = name, updatedAt = ns.GetUpdatedAt(), modifiers = CopyTable(ns.db.modifiers) }
+    if name == "auto sync" then PruneAutoBackups() end
+    ns.Print(string.format(ns.L.BACKUP_SAVED, key, name))
     return key
 end
 
@@ -165,7 +166,7 @@ function ns.RestoreBackup(key)
         ns.Print(string.format(ns.L.RESTORE_OLDER, key, ns.FormatStamp(backup.updatedAt), ns.FormatStamp(ns.GetUpdatedAt())))
         return false
     end
-    ns.SaveBackup()
+    ns.SaveBackup("restore")
     ns.db.modifiers = CopyTable(backup.modifiers)
     ns.db.sync.updatedAt = backup.updatedAt
     ns.RefreshRoster()
@@ -219,7 +220,7 @@ function ns.ImportModifiers(text)
         ns.Print(string.format(ns.L.IMPORT_OLDER, ns.FormatStamp(stamp), ns.FormatStamp(own)))
         return false
     end
-    ns.SaveBackup()
+    ns.SaveBackup("import")
     ns.db.modifiers = state
     ns.db.sync.updatedAt = stamp
     ns.RefreshRoster()
@@ -232,7 +233,7 @@ end
 -- GuildSync). Allowed for followers too.
 function ns.ResetData()
     if ns.IsSyncPending() then ns.Print(ns.L.BUSY); return false end
-    if next(ns.db.modifiers) then ns.SaveBackup() end
+    if next(ns.db.modifiers) then ns.SaveBackup("reset") end
     ns.db.modifiers = {}
     ns.db.sync.updatedAt = 0
     ns.RefreshRoster()

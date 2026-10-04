@@ -137,7 +137,7 @@ local function ShowTools(button)
         end)
         setMaster:SetEnabled(not ns.IsSyncPending() and not ns.IsMaster())
         root:CreateDivider()
-        root:CreateButton(ns.L.BACKUP, ns.SaveBackup)
+        root:CreateButton(ns.L.BACKUP, function() ns.SaveBackup("manual") end)
         root:CreateButton(ns.L.EXPORT, ns.ExportModifiers)
         local import = root:CreateButton(ns.L.IMPORT, ns.ShowImportFrame)
         import:SetEnabled(ns.CanEditModifiers())
@@ -151,7 +151,8 @@ local function ShowTools(button)
         else
             restore:SetScrollMode(300)
             for _, key in ipairs(keys) do
-                restore:CreateButton(key, function() ns.RestoreBackup(key) end)
+                local name = ns.db.backups[key].name
+                restore:CreateButton(name and (key .. " (" .. name .. ")") or key, function() ns.RestoreBackup(key) end)
             end
         end
         root:CreateDivider()
