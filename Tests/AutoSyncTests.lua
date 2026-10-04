@@ -220,3 +220,73 @@ test("a second changed sync inside the rate limit explains the wait", function()
     p.roster = { "Master", "Follower", "ZeroMember", "ThirdMember" }
     advance(61)
 end)
+
+test("a player who becomes master announces it so followers who chose them sync", function()
+    local alpha, beta = client("Alpha"), client("Beta")
+    alpha.roster, beta.roster = { "Alpha", "Beta" }, { "Alpha", "Beta" }
+    alpha.online.Beta = true
+    assert(alpha.ns.SetModifier("Alpha", 4))
+    assert(beta.ns.SelectMaster("Alpha") and last(beta):find("is offline", 1, true))
+    -- Alpha logs in without having chosen themselves: the master check is answered NOT_MASTER.
+    beta.online.Alpha = true
+    beta.ns.OnGuildRosterUpdate()
+    advance(10)
+    assert(beta.ns.GetModifier("Alpha") == 0 and beta.ns.db.sync.updatedAt == nil)
+    local mark = #delivered
+    alpha.ns.SelectMaster("Alpha")
+    advance(0.5)
+    local announce = delivered[mark + 1]
+    assert(announce and announce.channel == "GUILD" and announce.text:match("^ANNOUNCE\t[%w%-]+\t" .. alpha.ns.db.sync.updatedAt .. "$"))
+    assert(#messagesFrom("Beta", "REQUEST", mark) == 0, "followers wait a random delay")
+    advance(2.5) -- two online members: the delay is 1-2 s
+    assert(#messagesFrom("Beta", "REQUEST", mark) == 1)
+    assert(beta.ns.GetModifier("Alpha") == 4 and beta.ns.db.sync.updatedAt == alpha.ns.db.sync.updatedAt)
+    assert(not beta.ns.IsSyncPending() and #messagesFrom("Alpha", "BEGIN", mark) == 1)
+end)
+
+test("an announcement with an unchanged updatedAt starts nothing", function()
+    advance(61)
+    local alpha, beta = harness.clients.Alpha, harness.clients.Beta
+    local mark = #delivered
+    alpha.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-1\t" .. beta.ns.db.sync.updatedAt, "GUILD", "Alpha")
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-1\t" .. beta.ns.db.sync.updatedAt, "GUILD", "Alpha")
+    advance(30)
+    assert(#delivered == mark)
+end)
+
+test("announcements are only accepted from the chosen master on the guild channel", function()
+    advance(61)
+    local beta = harness.clients.Beta
+    local mark = #delivered
+    local newer = beta.ns.db.sync.updatedAt + 5
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\t" .. newer, "GUILD", "Beta") -- not the master
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\t" .. newer, "WHISPER", "Alpha") -- wrong channel
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\tbad", "GUILD", "Alpha")
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2", "GUILD", "Alpha")
+    beta.ns.OnSyncMessage("Rollover", "REQUEST\tx-3", "GUILD", "Alpha") -- only ANNOUNCE may use GUILD
+    advance(30)
+    assert(#delivered == mark)
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-2\t" .. newer, "GUILD", "Alpha")
+    advance(30)
+    assert(#messagesFrom("Beta", "REQUEST", mark) == 1)
+end)
+
+test("the announcement delay grows with the number of online guild members", function()
+    advance(61)
+    local beta = harness.clients.Beta
+    local roster = { "Alpha", "Beta" }
+    beta.online = { Alpha = true, Beta = true }
+    for i = 1, 60 do
+        roster[#roster + 1] = "Online" .. i
+        beta.online["Online" .. i] = true
+    end
+    beta.roster = roster
+    local mark, random = #delivered, math.random
+    math.random = function() return 0.99 end
+    beta.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-9\t" .. (beta.ns.db.sync.updatedAt + 5), "GUILD", "Alpha")
+    math.random = random
+    advance(20)
+    assert(#messagesFrom("Beta", "REQUEST", mark) == 0, "62 online members spread checks over 30 s")
+    advance(12)
+    assert(#messagesFrom("Beta", "REQUEST", mark) == 1)
+end)

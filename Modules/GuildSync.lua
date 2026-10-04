@@ -8,6 +8,9 @@ local SEND_INTERVAL, THROTTLE_RETRY, LOCKDOWN_RETRY = 0.2, 1, 5
 -- and delays that let a freshly loaded roster/master addon settle.
 local CHECK_TIMEOUT, CHECK_RETRY_DELAY, CHECK_COOLDOWN = 15, 5, 60
 local LOGIN_DELAY, ONLINE_DELAY = 2, 5
+-- Followers answering a master announcement wait a random time so they do not all hit the
+-- master's small send queue at once. The spread grows with the number of online guild members.
+local ANNOUNCE_DELAY, ANNOUNCE_SPREAD_PER_MEMBER, ANNOUNCE_MAX_SPREAD = 1, 0.5, 30
 local MAX_STAMP = 2 ^ 40
 local queue, recentRequests = {}, {}
 local pending, timer, ready
@@ -62,7 +65,7 @@ end
 -- Queued messages are dropped once their target left the roster, their request ended,
 -- or the owner of a snapshot stopped being master.
 local function IsCurrent(task)
-    if not ns.ResolveGuildMember(task.target) then return false end
+    if task.target and not ns.ResolveGuildMember(task.target) then return false end
     if task.request then return pending == task.request end
     return not task.snapshot or ns.IsMaster()
 end
@@ -72,9 +75,9 @@ Pump = function()
     if not task then return end
     if not IsCurrent(task) or GetTime() >= task.expires then
         table.remove(queue, 1)
-        ns.Debug("Dropped queued sync message for " .. task.target)
+        ns.Debug("Dropped queued sync message for " .. (task.target or task.channel))
     else
-        local result = C_ChatInfo.SendAddonMessage(PREFIX, task.messages[task.index], "WHISPER", task.target)
+        local result = C_ChatInfo.SendAddonMessage(PREFIX, task.messages[task.index], task.channel or "WHISPER", task.target)
         local results = Enum.SendAddonMessageResult
         if result == results.Success then
             task.index = task.index + 1
@@ -150,14 +153,19 @@ local function StartRequest(auto, attempt)
     end
 end
 
-AutoCheck = function(attempt)
+-- An "announced" check follows a master announcement: the master is known to be online even if
+-- the roster has not caught up yet, and the announcement bypasses the cooldown.
+AutoCheck = function(attempt, announced)
     local source = ns.db.sync.master
     if not ready or pending or not source or not IsInGuild() or ns.IsMaster() then return end
-    if ns.IsGuildMemberOnline(source) ~= true then ns.Debug("Automatic sync check skipped: master offline"); return end
+    if not announced and ns.IsGuildMemberOnline(source) ~= true then
+        ns.Debug("Automatic sync check skipped: master offline")
+        return
+    end
     if #queue >= 3 then return end
     if attempt == 1 then
         local now = GetTime()
-        if lastAutoCheck and now - lastAutoCheck < CHECK_COOLDOWN then
+        if lastAutoCheck and not announced and now - lastAutoCheck < CHECK_COOLDOWN then
             ns.Debug("Automatic sync check skipped: cooldown")
             return
         end
@@ -177,6 +185,7 @@ function ns.SelectMaster(name)
     if ns.IsMaster() then
         if not ns.db.sync.updatedAt then ns.TouchModifiers() end
         ns.Print(ns.L.LOCAL_MASTER)
+        ns.AnnounceMaster()
     else
         -- The local table came from somewhere else, so the new master must always stream.
         ns.db.sync.updatedAt = nil
@@ -190,6 +199,15 @@ function ns.SelectMaster(name)
     end
     ns.RefreshRoster()
     return true
+end
+
+-- Tells every online guild member the new master's updatedAt. Followers that picked this player
+-- as master earlier (while they were offline or not yet master) then run a normal check.
+function ns.AnnounceMaster()
+    if not ready or not IsInGuild() or not ns.IsMaster() or not ns.db.sync.updatedAt then return end
+    sequence = sequence + 1
+    local id = string.format("%d-%d", GetServerTime(), sequence)
+    Enqueue({ channel = "GUILD", snapshot = true, messages = { Message("ANNOUNCE", id, ns.db.sync.updatedAt) } })
 end
 
 function ns.RequestSync()
@@ -239,13 +257,15 @@ local function Respond(sender, id, have)
             return
         end
     end
+    -- Declined before the rate limit, so a follower is not locked out right after this player
+    -- becomes master (see ns.AnnounceMaster).
+    if not ns.IsMaster() then SendError(sender, id, "NOT_MASTER"); return end
     local now = GetTime()
     if recentRequests[sender] and now - recentRequests[sender] < 30 then
         SendError(sender, id, "BUSY")
         return
     end
     recentRequests[sender] = now
-    if not ns.IsMaster() then SendError(sender, id, "NOT_MASTER"); return end
     if #queue >= 2 then SendError(sender, id, "BUSY"); return end
     local modifiers = CopyTable(ns.db.modifiers)
     for _, entry in ipairs(ns.GetRosterList("name", true)) do
@@ -297,9 +317,29 @@ function ns.OnPlayerEnteringWorld(isLogin, isReload)
     ns.RequestGuildRoster()
 end
 
+-- Only the master this player selected is followed. A differing updatedAt (or none) means the
+-- master has data we have not synced, which the normal request/CURRENT/stream check settles.
+local function AnnounceDelay()
+    local online = 0
+    for i = 1, GetNumGuildMembers() do
+        if select(9, GetGuildRosterInfo(i)) then online = online + 1 end
+    end
+    local spread = math.min(math.max(online * ANNOUNCE_SPREAD_PER_MEMBER, 1), ANNOUNCE_MAX_SPREAD)
+    return ANNOUNCE_DELAY + math.random() * spread
+end
+
+local function OnAnnounce(member, stamp)
+    if member ~= ns.db.sync.master or ns.IsMaster() or stamp == ns.db.sync.updatedAt then return end
+    masterOnline = true
+    ns.Debug(member .. " announced newer modifiers")
+    C_Timer.After(AnnounceDelay(), function()
+        if ns.db.sync.master == member and stamp ~= ns.db.sync.updatedAt then AutoCheck(1, true) end
+    end)
+end
+
 function ns.OnSyncMessage(prefix, text, channel, sender)
     if issecretvalue(prefix) or issecretvalue(text) or issecretvalue(channel) or issecretvalue(sender) then return end
-    if prefix ~= PREFIX or channel ~= "WHISPER" or type(text) ~= "string"
+    if prefix ~= PREFIX or (channel ~= "WHISPER" and channel ~= "GUILD") or type(text) ~= "string"
         or #text > 255 or type(sender) ~= "string" then return end
     local member = ns.ResolveGuildMember(sender)
     if not member then return end
@@ -307,6 +347,13 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
     for field in (text .. "\t"):gmatch("(.-)\t") do fields[#fields + 1] = field end
     local id = fields[2]
     if not id or #id > 64 or not id:match("^[%w%-]+$") then return end
+    -- ANNOUNCE is the only message sent to the guild channel, and the only one accepted from it.
+    if (fields[1] == "ANNOUNCE") ~= (channel == "GUILD") then return end
+    if fields[1] == "ANNOUNCE" then
+        local stamp = #fields == 3 and Integer(fields[3], MAX_STAMP)
+        if stamp then OnAnnounce(member, stamp) end
+        return
+    end
     if fields[1] == "REQUEST" then
         local have
         if #fields == 3 then

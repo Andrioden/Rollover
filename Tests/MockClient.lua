@@ -64,11 +64,18 @@ function MockClient.new(root)
         env.C_ChatInfo = {
             RegisterAddonMessagePrefix = function(prefix) assert(#prefix <= 16); return c.prefix ~= false end,
             SendAddonMessage = function(prefix, message, channel, target)
-                assert(#message <= 255 and channel == "WHISPER")
+                assert(#message <= 255 and (channel == "WHISPER" or channel == "GUILD"))
                 if c.result ~= 0 then return c.result end
-                delivered[#delivered + 1] = { sender = name, target = target, text = message, time = clock }
+                delivered[#delivered + 1] = { sender = name, target = target, text = message, channel = channel, time = clock }
                 env.C_Timer.After(0.01, function()
-                    if clients[target] then clients[target].ns.OnSyncMessage(prefix, message, channel, name) end
+                    if channel == "GUILD" then
+                        -- Guild addon messages reach every online client, including the sender.
+                        for _, other in pairs(clients) do
+                            if other == c or c.online[other.name] then other.ns.OnSyncMessage(prefix, message, channel, name) end
+                        end
+                    elseif clients[target] then
+                        clients[target].ns.OnSyncMessage(prefix, message, channel, name)
+                    end
                 end)
                 return 0
             end,
@@ -227,6 +234,7 @@ function MockClient.new(root)
     return {
         advance = advance,
         client = client,
+        clients = clients,
         count = count,
         delivered = delivered,
         last = last,
