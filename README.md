@@ -1,6 +1,6 @@
 ## About
 
-WoW Addon to ...
+WoW Addon to ....
 
 
 ## How to get started
