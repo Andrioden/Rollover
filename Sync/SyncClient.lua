@@ -1,9 +1,10 @@
 local addonName, ns = ...
 
-local PREFIX = "Rollover"
-local TIMEOUT, MAX_MEMBERS = 1800, ns.MAX_MEMBERS
--- The server allows a burst of ~10 messages per prefix, then 1/sec; throttled sends retry.
-local SEND_INTERVAL, THROTTLE_RETRY, LOCKDOWN_RETRY = 0.2, 1, 5
+-- Follower side of the sync: selecting a master, manual/automatic requests, and receiving and
+-- applying the master's stream.
+local Sync = ns.Sync
+local Message, Integer, Enqueue = Sync.Message, Sync.Integer, Sync.Enqueue
+local TIMEOUT, MAX_MEMBERS, MAX_STAMP, MAX_QUEUE = Sync.TIMEOUT, Sync.MAX_MEMBERS, Sync.MAX_STAMP, Sync.MAX_QUEUE
 -- Automatic checks: how long to wait for the master's reply, cooldown between checks,
 -- and delays that let a freshly loaded roster/master addon settle.
 local CHECK_TIMEOUT, CHECK_RETRY_DELAY, CHECK_COOLDOWN = 15, 5, 60
@@ -11,14 +12,10 @@ local LOGIN_DELAY, ONLINE_DELAY = 2, 5
 -- Followers answering a master announcement wait a random time so they do not all hit the
 -- master's small send queue at once. The spread grows with the number of online guild members.
 local ANNOUNCE_DELAY, ANNOUNCE_SPREAD_PER_MEMBER, ANNOUNCE_MAX_SPREAD = 1, 0.5, 30
-local MAX_STAMP = 2 ^ 40
-local queue, recentRequests = {}, {}
-local pending, timer, ready
-local sequence = 0
+local pending
 local masterOnline, awaitingLogin, lastAutoCheck
 -- Master stamp of the last "older than yours" rejection, so automatic checks warn once per stamp.
 local rejectedStamp
-
 
 -- Ends the active transfer with a chat message. The received values are only applied at END, so
 -- a failed or cancelled transfer never changes local data. Automatic checks that fail before
@@ -32,82 +29,6 @@ end
 
 local function Fail(message)
     EndTransfer(string.format(ns.L.SYNC_FAILED, message))
-end
-
-local function Message(kind, id, ...)
-    local fields = { kind, id, ... }
-    for i = 1, #fields do fields[i] = tostring(fields[i]) end
-    return table.concat(fields, "\t")
-end
-
-local function Integer(text, maximum)
-    if not text or not text:match("^%d+$") then return end
-    local value = tonumber(text)
-    if value and value <= maximum then return value end
-end
-
-local Pump
-local function Schedule(delay)
-    if timer then return end
-    timer = C_Timer.NewTimer(delay, function()
-        timer = nil
-        Pump()
-    end)
-end
-
-local function Enqueue(task)
-    if #queue >= 3 then ns.Debug("Sync send queue is full"); return false end
-    task.index, task.expires = 1, GetTime() + TIMEOUT
-    queue[#queue + 1] = task
-    Schedule(0)
-    return true
-end
-
--- Queued messages are dropped once their target left the roster, their request ended,
--- or the owner of a snapshot stopped being master.
-local function IsCurrent(task)
-    if task.target and not ns.ResolveGuildMember(task.target) then return false end
-    if task.request then return pending == task.request end
-    return not task.snapshot or ns.IsMaster()
-end
-
-Pump = function()
-    local task = queue[1]
-    if not task then return end
-    if not IsCurrent(task) or GetTime() >= task.expires then
-        table.remove(queue, 1)
-        ns.Debug("Dropped queued sync message for " .. (task.target or task.channel))
-    else
-        local result = C_ChatInfo.SendAddonMessage(PREFIX, task.messages[task.index], task.channel or "WHISPER", task.target)
-        local results = Enum.SendAddonMessageResult
-        if result == results.Success then
-            task.index = task.index + 1
-            task.deferred = nil
-            if task.index > #task.messages then table.remove(queue, 1) end
-        elseif result == results.AddonMessageThrottle then
-            -- Normal once the burst allowance is used up; it regains 1 message per second.
-            ns.Debug("Sync send throttled; retrying")
-            Schedule(THROTTLE_RETRY)
-            return
-        elseif result == results.AddOnMessageLockdown then
-            -- Tell the player once per deferral.
-            if not task.deferred then
-                task.deferred = true
-                if task.request and task.request.auto and not task.request.count then
-                    ns.Debug("Automatic sync check deferred: communication restricted")
-                else
-                    ns.Print(ns.L.DEFERRED)
-                end
-            end
-            Schedule(LOCKDOWN_RETRY)
-            return
-        else
-            table.remove(queue, 1)
-            local message = string.format(ns.L.SEND_FAILED, tostring(result))
-            if task.request and pending == task.request then Fail(message) else ns.Print(message) end
-        end
-    end
-    if #queue > 0 then Schedule(SEND_INTERVAL) end
 end
 
 function ns.IsSyncPending()
@@ -124,15 +45,21 @@ end
 -- Requests send the local updatedAt so an up-to-date master answers CURRENT instead of streaming.
 local AutoCheck
 local function StartRequest(auto, attempt)
-    sequence = sequence + 1
     local transfer = {
-        id = string.format("%d-%d", GetServerTime(), sequence),
+        id = Sync.NewID(),
         sender = ns.db.sync.master, received = 0, modifiers = {}, auto = auto,
         have = ns.GetUpdatedAt(),
     }
     pending = transfer
     local request = transfer.have and Message("REQUEST", transfer.id, transfer.have) or Message("REQUEST", transfer.id)
-    Enqueue({ target = transfer.sender, request = transfer, messages = { request } })
+    Enqueue({
+        target = transfer.sender, messages = { request },
+        current = function() return pending == transfer end,
+        quiet = function() return transfer.auto and not transfer.count end,
+        fail = function(message)
+            if pending == transfer then Fail(message) else ns.Print(message) end
+        end,
+    })
     ns.RefreshRoster()
     C_Timer.After(TIMEOUT, function()
         if pending == transfer then Fail(ns.L.TIMEOUT) end
@@ -152,12 +79,12 @@ end
 -- the roster has not caught up yet, and the announcement bypasses the cooldown.
 AutoCheck = function(attempt, announced)
     local source = ns.db.sync.master
-    if not ready or pending or not source or not IsInGuild() or ns.IsMaster() then return end
+    if not Sync.IsReady() or pending or not source or not IsInGuild() or ns.IsMaster() then return end
     if not announced and ns.IsGuildMemberOnline(source) ~= true then
         ns.Debug("Automatic sync check skipped: master offline")
         return
     end
-    if #queue >= 3 then return end
+    if Sync.QueueLength() >= MAX_QUEUE then return end
     if attempt == 1 then
         local now = GetTime()
         if lastAutoCheck and not announced and now - lastAutoCheck < CHECK_COOLDOWN then
@@ -193,86 +120,18 @@ function ns.SelectMaster(name)
     return true
 end
 
--- Tells every online guild member the new master's updatedAt. Followers that picked this player
--- as master earlier (while they were offline or not yet master) then run a normal check.
-function ns.AnnounceMaster()
-    if not ready or not IsInGuild() or not ns.IsMaster() or ns.GetUpdatedAt() == 0 then return end
-    sequence = sequence + 1
-    local id = string.format("%d-%d", GetServerTime(), sequence)
-    Enqueue({ channel = "GUILD", snapshot = true, messages = { Message("ANNOUNCE", id, ns.GetUpdatedAt()) } })
-end
-
 function ns.RequestSync()
-    if not ready then ns.Print(ns.L.PREFIX_FAILED); return false end
+    if not Sync.IsReady() then ns.Print(ns.L.PREFIX_FAILED); return false end
     if pending then ns.Print(ns.L.BUSY); return false end
     local source = ns.db.sync.master
     if not source then ns.Print(ns.L.SELECT_MASTER); return false end
     if ns.IsMaster() then ns.Print(ns.L.LOCAL_MASTER); return false end
     if not IsInGuild() then ns.Print(ns.L.NO_GUILD); return false end
     if not ns.ResolveGuildMember(source) then ns.Print(ns.L.UNKNOWN_PLAYER); return false end
-    if #queue >= 3 then ns.Print(ns.L.BUSY); return false end
+    if Sync.QueueLength() >= MAX_QUEUE then ns.Print(ns.L.BUSY); return false end
     StartRequest(false, 1)
     ns.Print(string.format(ns.L.REQUESTING, source))
     return true
-end
-
-local function SendError(sender, id, code)
-    local reasons = { NOT_MASTER = ns.L.NOT_MASTER_LOCAL, BUSY = ns.L.REQUESTED_TOO_SOON, INVALID_TRANSFER = ns.L.INVALID_TRANSFER }
-    ns.Print(string.format(ns.L.SYNC_DECLINED, sender, reasons[code]))
-    Enqueue({ target = sender, messages = { Message("ERROR", id, code) } })
-end
-
--- Packs as many name/value pairs into each VALUE message as fit in 255 bytes:
--- VALUE, id, index of the first entry, then name, value, name, value, ...
-local function ValueMessages(id, names, modifiers)
-    local messages, current, first = {}, nil, nil
-    for i, name in ipairs(names) do
-        local entry = "\t" .. name .. "\t" .. string.format("%.17g", modifiers[name])
-        if current and #current + #entry > 255 then
-            messages[#messages + 1] = current
-            current = nil
-        end
-        current = (current or Message("VALUE", id, i)) .. entry
-    end
-    if current then messages[#messages + 1] = current end
-    return messages
-end
-
-local function Respond(sender, id, have)
-    -- An up-to-date follower costs one tiny reply, is not rate limited and is not announced.
-    if ns.IsMaster() then
-        if have == ns.GetUpdatedAt() then
-            if #queue >= 2 then ns.Debug("Dropped CURRENT reply: send queue is busy"); return end
-            ns.Debug(sender .. " is up to date")
-            Enqueue({ target = sender, snapshot = true, messages = { Message("CURRENT", id) } })
-            return
-        end
-    end
-    -- Declined before the rate limit, so a follower is not locked out right after this player
-    -- becomes master (see ns.AnnounceMaster).
-    if not ns.IsMaster() then SendError(sender, id, "NOT_MASTER"); return end
-    local now = GetTime()
-    if recentRequests[sender] and now - recentRequests[sender] < 30 then
-        SendError(sender, id, "BUSY")
-        return
-    end
-    recentRequests[sender] = now
-    if #queue >= 2 then SendError(sender, id, "BUSY"); return end
-    local modifiers = CopyTable(ns.db.modifiers)
-    for _, entry in ipairs(ns.GetRosterList("name", true)) do
-        if modifiers[entry.name] == nil then modifiers[entry.name] = 0 end
-    end
-    local valid = ns.ValidateModifierState(modifiers)
-    if not valid then SendError(sender, id, "INVALID_TRANSFER"); return end
-    local names = {}
-    for name in pairs(modifiers) do names[#names + 1] = name end
-    table.sort(names)
-    local messages = { Message("BEGIN", id, #names, ns.GetUpdatedAt()) }
-    for _, message in ipairs(ValueMessages(id, names, modifiers)) do messages[#messages + 1] = message end
-    messages[#messages + 1] = Message("END", id, #names)
-    if Enqueue({ target = sender, snapshot = true, messages = messages }) then
-        ns.Print(string.format(ns.L.SYNC_REQUESTED, sender, #names))
-    end
 end
 
 -- A transfer cannot continue once its master left the guild roster.
@@ -329,34 +188,13 @@ local function OnAnnounce(member, stamp)
     end)
 end
 
-function ns.OnSyncMessage(prefix, text, channel, sender)
-    if issecretvalue(prefix) or issecretvalue(text) or issecretvalue(channel) or issecretvalue(sender) then return end
-    if prefix ~= PREFIX or (channel ~= "WHISPER" and channel ~= "GUILD") or type(text) ~= "string"
-        or #text > 255 or type(sender) ~= "string" then return end
-    local member = ns.ResolveGuildMember(sender)
-    if not member then return end
-    local fields = {}
-    for field in (text .. "\t"):gmatch("(.-)\t") do fields[#fields + 1] = field end
-    local id = fields[2]
-    if not id or #id > 64 or not id:match("^[%w%-]+$") then return end
-    -- ANNOUNCE is the only message sent to the guild channel, and the only one accepted from it.
-    if (fields[1] == "ANNOUNCE") ~= (channel == "GUILD") then return end
-    if fields[1] == "ANNOUNCE" then
-        local stamp = #fields == 3 and Integer(fields[3], MAX_STAMP)
-        if stamp then OnAnnounce(member, stamp) end
-        return
-    end
-    if fields[1] == "REQUEST" then
-        local have
-        if #fields == 3 then
-            have = Integer(fields[3], MAX_STAMP)
-            if not have then return end
-        elseif #fields ~= 2 then
-            return
-        end
-        Respond(member, id, have)
-        return
-    end
+function ns.OnSyncAnnounce(member, fields)
+    local stamp = #fields == 3 and Integer(fields[3], MAX_STAMP)
+    if stamp then OnAnnounce(member, stamp) end
+end
+
+-- Handles the master's reply to the active request (BEGIN, VALUE, END, CURRENT, ERROR).
+function ns.OnSyncReply(member, id, fields)
     if not pending or member ~= pending.sender or id ~= pending.id then return end
     if fields[1] == "BEGIN" then
         local count = #fields == 4 and Integer(fields[3], MAX_MEMBERS)
@@ -425,9 +263,4 @@ function ns.OnSyncMessage(prefix, text, channel, sender)
     else
         Fail(ns.L.INVALID_TRANSFER)
     end
-end
-
-function ns.InitGuildSync()
-    ready = C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
-    if not ready then ns.Print(ns.L.PREFIX_FAILED) end
 end

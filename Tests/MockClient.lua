@@ -227,7 +227,9 @@ function MockClient.new(root)
         c.load("Locales\\enUS.lua")
         c.load("Core\\Utils.lua")
         c.load("Core\\DB.lua")
-        c.load("Modules\\GuildSync.lua")
+        c.load("Sync\\SyncCore.lua")
+        c.load("Sync\\SyncMaster.lua")
+        c.load("Sync\\SyncClient.lua")
         c.load("UI\\DebugFrame.lua")
         c.load("UI\\TextDialog.lua")
         c.load("UI\\ExportFrame.lua")
@@ -272,8 +274,33 @@ function MockClient.new(root)
         return string.format("%d-%d", c.env.GetServerTime(), sequences[c])
     end
 
+    -- Addon messages delivered from `name` whose type is `kind`, after delivered[mark].
+    local function messagesFrom(name, kind, mark)
+        local found = {}
+        for i = (mark or 0) + 1, #delivered do
+            local entry = delivered[i]
+            if entry.sender == name and entry.text:find(kind .. "\t", 1, true) == 1 then found[#found + 1] = entry.text end
+        end
+        return found
+    end
+
+    local function backupCount(c)
+        local total = 0
+        for _ in pairs(c.ns.db.backups) do total = total + 1 end
+        return total
+    end
+
+    -- Simulates a login/reload followed by the first roster update.
+    local function login(c)
+        c.ns.OnPlayerEnteringWorld(true, false)
+        c.ns.OnGuildRosterUpdate()
+    end
+
     return {
         advance = advance,
+        backupCount = backupCount,
+        login = login,
+        messagesFrom = messagesFrom,
         client = client,
         clients = clients,
         count = count,

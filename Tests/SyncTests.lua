@@ -1,12 +1,15 @@
--- Run with a standalone Lua interpreter: lua Tests\GuildSyncTests.lua <addon directory>
--- Covers Modules\GuildSync.lua: master streaming over WHISPER, validation, retries and failure reporting.
+-- Run with a standalone Lua interpreter: lua Tests\SyncTests.lua <addon directory>
+-- Covers a real master and followers talking over the mocked client: manual syncs end to end, recovery from
+-- lockdown and throttling, realm-less names, large rosters and the rules that data only moves forward.
+-- Single-sided behavior lives in SyncClientTests.lua and SyncMasterTests.lua, automatic checks in SyncAutoTests.lua.
 local root = arg[1] or "."
 package.path = root .. "\\?.lua;" .. package.path
 local harness = require("Tests.MockClient").new(root)
 local advance, client = harness.advance, harness.client
 local count, last, printedSince = harness.count, harness.last, harness.printedSince
-local delivered, secret, requestSync = harness.delivered, harness.secret, harness.requestSync
-local test = harness.suite("Modules\\GuildSync.lua")
+local delivered, requestSync = harness.delivered, harness.requestSync
+local backupCount, login, messagesFrom = harness.backupCount, harness.login, harness.messagesFrom
+local test = harness.suite("Sync master and follower together")
 
 local p, f = client("Master"), client("Follower")
 assert(p.ns.SetModifier("Master", 12.5) and p.ns.SetModifier("FormerMember", -4))
@@ -50,45 +53,6 @@ test("sync keeps a pre-sync backup that can be restored", function()
     advance(35)
 end)
 
-test("import, restore and source changes are blocked while receiving", function()
-    assert(requestSync(f))
-    assert(not f.ns.ImportModifiers("{}") and not f.ns.SelectMaster("Follower"))
-    f.ns.CancelSync()
-    advance(35)
-end)
-
-test("protocol guards reject spoofed, secret and mismatched messages", function()
-    f.ns.db.modifiers = { OldMember = 42 }
-    local id = requestSync(f)
-    assert(id)
-    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t1\t5", "WHISPER", "ThirdMember")
-    f.ns.OnSyncMessage("Rollover", secret, "WHISPER", "Master")
-    f.ns.OnSyncMessage("Rollover", "BEGIN\twrong\t1\t5", "WHISPER", "Master")
-    assert(f.ns.GetModifier("OldMember") == 42)
-    f.ns.CancelSync()
-    advance(35)
-end)
-
-test("an incomplete transfer changes nothing: data, age and backups stay", function()
-    f.ns.db.modifiers = { OldMember = 42 }
-    f.ns.db.sync.updatedAt = 1700000000
-    local id = requestSync(f)
-    f.ns.db.sync.updatedAt = 1700000000
-    local backups = 0
-    for _ in pairs(f.ns.db.backups) do backups = backups + 1 end
-    f.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t1700000005", "WHISPER", "Master")
-    f.ns.OnSyncMessage("Rollover", "VALUE\t" .. id .. "\t1\tMaster\t-7", "WHISPER", "Master")
-    assert(f.ns.GetModifier("Master") == 0, "received values are only buffered")
-    f.ns.OnSyncMessage("Rollover", "END\t" .. id .. "\t2", "WHISPER", "Master")
-    local after = 0
-    for _ in pairs(f.ns.db.backups) do after = after + 1 end
-    assert(not f.ns.IsSyncPending() and last(f):find("Sync failed", 1, true))
-    assert(f.ns.GetModifier("OldMember") == 42 and f.ns.GetModifier("Master") == 0)
-    assert(f.ns.db.sync.updatedAt == 1700000000 and after == backups)
-    assert(not table.concat(f.prints, "\n"):find("may be incomplete", 1, true))
-    advance(35)
-end)
-
 test("lockdown defers the request and retries with a single notice", function()
     f.result = 11
     assert(requestSync(f))
@@ -102,24 +66,6 @@ test("lockdown defers the request and retries with a single notice", function()
     advance(35)
 end)
 
-test("send failure before BEGIN does not claim partial changes", function()
-    local mark = #f.prints
-    f.result = 12
-    assert(requestSync(f))
-    advance(2)
-    assert(not f.ns.IsSyncPending() and last(f):find("12", 1, true))
-    assert(count(f, "may be incomplete", mark) == 0)
-    f.result = 0
-    advance(35)
-end)
-
-test("cancel releases the receiver immediately", function()
-    assert(requestSync(f))
-    f.ns.CancelSync()
-    assert(not f.ns.IsSyncPending() and last(f):find("cancelled", 1, true))
-    advance(35)
-end)
-
 test("throttle retries silently", function()
     f.result = 3
     local deferredBefore = count(f, f.ns.L.DEFERRED)
@@ -129,42 +75,6 @@ test("throttle retries silently", function()
     f.result = 0
     advance(20)
     assert(not f.ns.IsSyncPending() and last(f):find("Synced", 1, true))
-end)
-
-test("losing the guild cancels an active receive", function()
-    assert(requestSync(f))
-    f.guild = nil
-    f.ns.OnSyncContextChanged()
-    assert(not f.ns.IsSyncPending())
-    f.guild = "Guild"
-    advance(35)
-end)
-
-test("timeout ends the transfer", function()
-    f.result = 11
-    assert(requestSync(f))
-    advance(1801)
-    assert(not f.ns.IsSyncPending() and last(f):find("timed out", 1, true))
-    f.result = 0
-end)
-
-test("a non-master answers NOT_MASTER", function()
-    local mark = #f.prints
-    local third = client("ThirdMember")
-    advance(35)
-    assert(f.ns.SelectMaster("ThirdMember"))
-    assert(requestSync(f))
-    advance(5)
-    assert(not f.ns.IsSyncPending() and last(f):find("not the master", 1, true))
-    assert(count(f, "may be incomplete", mark) == 0)
-    assert(third.ns)
-end)
-
-test("sync is unavailable when the addon prefix cannot be registered", function()
-    local noPrefix = client("NoPrefix")
-    noPrefix.prefix = false
-    noPrefix.ns.InitGuildSync()
-    assert(not requestSync(noPrefix))
 end)
 
 test("realm-less 'First Last' names sync", function()
@@ -202,14 +112,103 @@ test("large rosters are packed into several VALUE messages", function()
     assert(printedSince(bf, mark):find("Received 100/100", 1, true))
 end)
 
-test("a duplicate name inside one packed VALUE fails the transfer", function()
-    advance(35)
-    local mark = #bf.prints
-    local id = requestSync(bf)
-    assert(id)
-    bf.ns.OnSyncMessage("Rollover", "BEGIN\t" .. id .. "\t2\t5", "WHISPER", "Big Master")
-    bf.ns.OnSyncMessage("Rollover", "VALUE\t" .. id .. "\t1\tBig Follower\t1\tBig Follower\t2", "WHISPER", "Big Master")
-    assert(not bf.ns.IsSyncPending() and printedSince(bf, mark):find("Invalid or incomplete", 1, true))
+test("a repeated manual sync reports up to date instead of failing as busy", function()
+    advance(1)
+    local mark, deliveredMark = #f.prints, #delivered
+    assert(f.ns.RequestSync())
+    advance(2)
+    assert(not f.ns.IsSyncPending() and last(f):find("Already up to date with Master", 1, true))
+    assert(not printedSince(f, mark):find("Sync failed", 1, true))
+    assert(#messagesFrom("Master", "CURRENT", deliveredMark) == 1)
+end)
+
+test("a second changed sync inside the rate limit explains the wait", function()
+    local second = client("Second")
+    second.online.Master = true
+    p.online.Second = true
+    p.roster, second.roster = { "Master", "Follower", "Second" }, { "Master", "Follower", "Second" }
+    assert(second.ns.SelectMaster("Master"))
+    advance(3)
+    assert(p.ns.SetModifier("Master", 6))
+    assert(second.ns.RequestSync())
+    advance(3)
+    assert(not second.ns.IsSyncPending() and last(second):find("master is busy or was asked too recently", 1, true))
+    assert(not last(second):find("already active", 1, true))
+    p.roster = { "Master", "Follower", "ZeroMember", "ThirdMember" }
+    advance(61)
+end)
+
+local old, new = client("Oldie"), client("Newbie")
+
+test("a follower rejects a master with older data before touching anything", function()
+    advance(61)
+    old.roster, new.roster = { "Oldie", "Newbie" }, { "Oldie", "Newbie" }
+    old.online.Newbie, new.online.Oldie = true, true
+    assert(old.ns.SelectMaster("Oldie") and old.ns.SetModifier("Oldie", 1))
+    new.ns.db.modifiers = { Oldie = 77 }
+    new.ns.db.sync.updatedAt = old.ns.db.sync.updatedAt + 100
+    local backups = backupCount(new)
+    assert(new.ns.SelectMaster("Oldie"))
+    advance(3)
+    assert(#messagesFrom("Oldie", "BEGIN") == 1, "the master streams; the follower refuses")
+    assert(not new.ns.IsSyncPending() and new.ns.GetModifier("Oldie") == 77)
+    assert(new.ns.db.sync.updatedAt == old.ns.db.sync.updatedAt + 100 and backupCount(new) == backups)
+    local output = printedSince(new, 0)
+    assert(output:find("Oldie has older modifiers", 1, true) and not output:find("may be incomplete", 1, true))
+end)
+
+test("announcements older than the local data are ignored", function()
+    advance(61)
+    local mark = #delivered
+    local stamp = old.ns.db.sync.updatedAt
+    new.ns.OnSyncMessage("Rollover", "ANNOUNCE\tx-1\t" .. stamp, "GUILD", "Oldie")
+    advance(30)
+    assert(#messagesFrom("Newbie", "REQUEST", mark) == 0)
+end)
+
+test("automatic checks report an older master once per stamp, manual syncs always", function()
+    advance(61)
+    local mark = #new.prints
+    login(new)
+    advance(5)
+    assert(#new.prints == mark and not new.ns.IsSyncPending() and new.ns.GetModifier("Oldie") == 77)
+    advance(61)
+    assert(new.ns.RequestSync())
+    advance(3)
+    assert(printedSince(new, mark):find("has older modifiers", 1, true))
+end)
+
+test("reset data lets a follower take the older master's data", function()
+    advance(61)
+    assert(new.ns.ResetData() and new.ns.db.sync.updatedAt == 0)
+    assert(new.ns.RequestSync())
+    advance(3)
+    assert(new.ns.GetModifier("Oldie") == 1 and new.ns.db.sync.updatedAt == old.ns.db.sync.updatedAt)
+    assert(not new.ns.IsSyncPending())
+end)
+
+test("a master with the same updatedAt never replaces local data", function()
+    advance(61)
+    new.ns.db.modifiers.Oldie = 5 -- diverged content under an equal stamp
+    local mark = #delivered
+    assert(new.ns.RequestSync())
+    advance(3)
+    assert(#messagesFrom("Oldie", "CURRENT", mark) == 1 and #messagesFrom("Oldie", "BEGIN", mark) == 0)
+    assert(new.ns.GetModifier("Oldie") == 5)
+end)
+
+test("a fresh master with no data cannot overwrite followers", function()
+    advance(61)
+    local blank, other = client("Blank"), client("Other")
+    blank.roster, other.roster = { "Blank", "Other" }, { "Blank", "Other" }
+    blank.online.Other, other.online.Blank = true, true
+    assert(blank.ns.SelectMaster("Blank") and blank.ns.GetUpdatedAt() == 0)
+    other.ns.db.modifiers = { Blank = 5 }
+    other.ns.db.sync.updatedAt = 1800000005
+    assert(other.ns.SelectMaster("Blank"))
+    advance(3)
+    assert(other.ns.GetModifier("Blank") == 5 and other.ns.db.sync.updatedAt == 1800000005)
+    assert(#messagesFrom("Blank", "BEGIN") >= 1 and not other.ns.IsSyncPending())
 end)
 
 test("every sent addon message fits in 255 bytes", function()

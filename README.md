@@ -17,5 +17,5 @@ lua .\Tests\RolloverTests.lua .
 
 Run one suite
 ```powershell
-lua .\Tests\GuildSyncTests.lua .
+lua .\Tests\SyncTests.lua .
 ```

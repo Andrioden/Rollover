@@ -8,7 +8,9 @@
 Locales\enUS.lua
 Core\Utils.lua
 Core\DB.lua
-Modules\GuildSync.lua
+Sync\SyncCore.lua
+Sync\SyncMaster.lua
+Sync\SyncClient.lua
 UI\MainFrame.lua
 UI\DebugFrame.lua
 UI\TextDialog.lua
